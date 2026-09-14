@@ -1,0 +1,8 @@
+sample_id	species	host	host_group	lineage	platform
+CAMPY_A	Campylobacter jejuni	starling	wild_bird	L1	pacbio
+CAMPY_B	Campylobacter jejuni	crow	wild_bird	L2	pacbio
+CAMPY_C	Campylobacter jejuni	cattle	livestock	L1	pacbio
+CAMPY_D	Campylobacter jejuni	cattle	livestock	L3	pacbio
+CAMPY_E	Campylobacter jejuni	water	environment	L2	pacbio
+CAMPY_F	Campylobacter jejuni	water	environment	L4	pacbio
+CAMPY_BAD	Campylobacter jejuni	crow	wild_bird	L2	pacbio

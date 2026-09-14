@@ -1,0 +1,14 @@
+name: momento
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - pytest
+  - pip
+  - pip:
+      - -e .
