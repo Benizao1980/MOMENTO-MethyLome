@@ -76,13 +76,17 @@ def cmd_build_cohort(a):
             low_data_threshold=a.low_data_threshold,
             min_context_coverage=a.min_context_coverage,
             min_context_concordance=a.min_context_concordance,
+            min_gff_span_fraction=a.min_gff_span_fraction,
+            min_gff_bin_coverage=a.min_gff_bin_coverage,
+            min_gff_records_for_span=a.min_gff_records_for_span,
         )
     except (OSError, ValueError) as exc:
         raise SystemExit(f"FAIL: cohort: {exc}") from exc
 
     counts = audit["qc_status"].value_counts().to_dict() if len(audit) else {}
     status_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
-    imported = int((audit["qc_status"].isin(["PASS", "LOW_DATA", "NO_SUMMARY"])).sum()) if len(audit) else 0
+    imported_statuses = ["PASS", "LOW_DATA", "NO_SUMMARY", "PARTIAL_GFF"]
+    imported = int((audit["qc_status"].isin(imported_statuses)).sum()) if len(audit) else 0
     print(
         f"COHORT: {imported}/{len(audit)} samples imported; {len(combined):,} motif/modification rows"
         + (f"; {status_text}" if status_text else "")
@@ -182,6 +186,33 @@ def build_parser():
         type=float,
         default=0.99,
         help="minimum exact-match fraction among compared contexts (default: 0.99)",
+    )
+    bc.add_argument(
+        "--min-gff-span-fraction",
+        type=float,
+        default=0.90,
+        help=(
+            "minimum genome-weighted min-to-max coordinate span for sufficiently "
+            "large GFFs before qc_status=PARTIAL_GFF (default: 0.90)"
+        ),
+    )
+    bc.add_argument(
+        "--min-gff-bin-coverage",
+        type=float,
+        default=0.80,
+        help=(
+            "minimum genome fraction in 20-bin windows containing GFF features "
+            "before qc_status=PARTIAL_GFF (default: 0.80)"
+        ),
+    )
+    bc.add_argument(
+        "--min-gff-records-for-span",
+        type=int,
+        default=1000,
+        help=(
+            "minimum GFF feature records required before coordinate-span QC is "
+            "enforced (default: 1000)"
+        ),
     )
     add_pacbio_import_options(bc)
     bc.set_defaults(func=cmd_build_cohort)

@@ -28,6 +28,8 @@ def test_context_preflight_exact_match(tmp_path):
     assert result["context_exact"] == 1
     assert result["context_coverage"] == 1.0
     assert result["context_concordance"] == 1.0
+    assert result["gff_feature_records"] == 1
+    assert result["gff_matched_records"] == 1
 
 
 def test_context_preflight_rejects_wrong_assembly(tmp_path):
@@ -69,6 +71,31 @@ def test_context_preflight_rejects_duplicate_fasta_ids(tmp_path):
 
     with pytest.raises(ValueError, match="Duplicate FASTA record ID"):
         context_preflight(gff, fasta)
+
+
+def test_context_preflight_flags_partial_gff(tmp_path):
+    fasta = tmp_path / "genome.fasta"
+    fasta.write_text(">chr\n" + "A" * 1000 + "\n")
+    gff = tmp_path / "partial.gff"
+    gff.write_text(
+        "chr\tkinModCall\tm6A\t10\t10\t50\t+\t.\tmotif=RAATTY,2\n"
+        "chr\tkinModCall\tm6A\t450\t450\t50\t+\t.\tmotif=RAATTY,2\n"
+    )
+
+    result = context_preflight(
+        gff,
+        fasta,
+        min_gff_records_for_span=1,
+        min_gff_span_fraction=0.90,
+        min_gff_bin_coverage=0.80,
+    )
+
+    assert result["preflight_status"] == "PARTIAL_GFF"
+    assert result["gff_feature_records"] == 2
+    assert result["gff_matched_records"] == 2
+    assert result["gff_span_fraction"] < 0.5
+    assert result["gff_bin_coverage_fraction"] < 0.8
+    assert "Partial/truncated GFF suspected" in result["message"]
 
 
 def test_load_manifest_rejects_duplicate_sample_ids(tmp_path):
@@ -114,3 +141,34 @@ def test_build_cohort_continues_after_sample_failure(tmp_path):
 
     audit_on_disk = pd.read_csv(outdir / "cohort.qc.tsv", sep="\t")
     assert set(audit_on_disk["sample_id"]) == {"GOOD", "BAD"}
+
+
+def test_build_cohort_imports_but_labels_partial_gff(tmp_path):
+    fasta = tmp_path / "toy.fasta"
+    fasta.write_text(">chr\nGAATTCAAATTT\n")
+    gff = tmp_path / "partial.gff"
+    gff.write_text(
+        "chr\tkinModCall\tm6A\t2\t2\t42\t+\t.\tmotif=RAATTY,2;coverage=55\n"
+        "chr\tkinModCall\tm6A\t3\t3\t44\t-\t.\tmotif=RAATTY,2;coverage=60\n"
+    )
+    manifest = tmp_path / "samples.tsv"
+    manifest.write_text(
+        "sample_id\tfasta\tgff\n"
+        "PARTIAL\ttoy.fasta\tpartial.gff\n"
+    )
+
+    outdir = tmp_path / "results"
+    combined, audit = build_cohort(
+        manifest,
+        outdir,
+        low_data_threshold=1,
+        min_gff_records_for_span=1,
+        min_gff_span_fraction=0.90,
+        min_gff_bin_coverage=0.80,
+    )
+
+    assert audit.loc[0, "preflight_status"] == "PARTIAL_GFF"
+    assert audit.loc[0, "qc_status"] == "PARTIAL_GFF"
+    assert set(combined["sample_id"]) == {"PARTIAL"}
+    assert set(combined["qc_status"]) == {"PARTIAL_GFF"}
+    assert (outdir / "samples" / "PARTIAL" / "PARTIAL.momento.tsv").exists()
