@@ -11,7 +11,6 @@ from .io.pacbio import (
     import_pacbio_gff,
     iter_gff,
     read_fasta,
-    reverse_complement_iupac,
 )
 
 MANIFEST_REQUIRED_COLUMNS = ("sample_id", "fasta", "gff")
@@ -21,6 +20,21 @@ AUDIT_COLUMNS = [
     "context_concordance", "qc_status", "motif_rows", "site_assignments",
     "included_assignments", "message",
 ]
+_SEQUENCE_COMPLEMENT = str.maketrans(
+    "ACGTRYMKSWBDHVNacgtrymkswbdhvn",
+    "TGCAYRKMSWVHDBNtgcayrkmswvhdbn",
+)
+
+
+def _reverse_complement_sequence(sequence: str) -> str:
+    """Reverse-complement assembly sequence while preserving unknown symbols.
+
+    Legacy assemblies occasionally contain placeholder characters such as
+    ``?``. Those characters should contribute a context mismatch if they differ
+    from the PacBio GFF, rather than crashing preflight. Known IUPAC bases are
+    complemented; unsupported symbols are retained after reversal.
+    """
+    return sequence.translate(_SEQUENCE_COMPLEMENT)[::-1].upper()
 
 
 def assess_import_status(summary: pd.DataFrame, sites: pd.DataFrame, low_data_threshold: int = 100) -> str:
@@ -106,12 +120,7 @@ def context_preflight(
 
         observed = seq[left:right]
         if record["strand"] == "-":
-            try:
-                observed = reverse_complement_iupac(observed)
-            except KeyError as exc:
-                raise ValueError(
-                    f"Unsupported FASTA base {exc.args[0]!r} while checking {fasta_path}"
-                ) from exc
+            observed = _reverse_complement_sequence(observed)
 
         compared += 1
         if observed == context:
