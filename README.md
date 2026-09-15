@@ -58,22 +58,41 @@ pip install -e ".[dev]"
 momento --help
 ```
 
+## First working importer: PacBio
+
+`momento import-pacbio` converts a PacBio methylation-site GFF plus the matching assembly FASTA into MOMENTO's canonical motif summary. The assembly is used to count genomic motif opportunities, so raw called-site counts can be converted to methylated fractions.
+
+```bash
+momento import-pacbio \
+  --gff RM1245motifs.gff \
+  --fasta CjRM1245.fasta \
+  --sample RM1245 \
+  --output RM1245.momento.tsv \
+  --sites-output RM1245.sites.tsv
+```
+
+The importer supports IUPAC motifs such as `RAATTY`, handles reverse complements, preserves site-level GFF attributes, and fails loudly if an explicit motif field cannot be identified instead of guessing from sequence context.
+
 ## CLI roadmap
 
 ```bash
 momento validate
-momento import-pacbio
-momento import-ont
+momento import-pacbio   # implemented
+momento import-ont      # planned
 momento qc
 momento matrix
 momento cluster
-momento mtase
-momento phase
-momento associate
-momento report
+momento mtase           # planned
+momento phase           # planned
+momento associate       # planned
+momento report          # planned
 ```
 
-The MVP implements validation, matrix generation, basic core-motif QC, prevalence summaries, PCA and Jaccard utilities. Platform importers and mechanistic modules are scaffolded for validation against real data.
+The MVP now implements validation, PacBio GFF import, genomic motif-opportunity counting, matrix generation, basic core-motif QC, prevalence summaries, PCA and Jaccard utilities.
+
+## v0.1 acceptance test
+
+The first real-data validation target is to reproduce the published methylome summaries for the *Campylobacter jejuni* HS:19 strains **RM1245** and **RM1477** directly from primary PacBio methylation GFFs plus assembly FASTAs. This provides an external ground truth for motif opportunity counting and methylated fractions before scaling to the full cohort.
 
 ## Campylobacter teaching example
 
@@ -85,6 +104,8 @@ See `examples/campylobacter/README.md`. The example uses synthetic/public-safe d
 - how to overlay host and genomic lineage;
 - how to connect motifs to candidate MTases and phase-variable loci;
 - how to avoid phylogenetic leakage in phenotype prediction.
+
+For the current 57-genome Campylobacter panel, the core-genome phylogeny should be built separately from assembly FASTAs using a bacterial annotation workflow (for example Bakta or Prokka) followed by Panaroo/PIRATE and IQ-TREE. The PacBio `*motifs.gff` files are methylation-call GFFs, **not** gene-annotation GFFs and should not be supplied directly to Panaroo/PIRATE.
 
 ## Data policy
 

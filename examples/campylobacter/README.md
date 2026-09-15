@@ -10,9 +10,31 @@ Mechanistic extension:
 
 > Are variable methylotypes explained by the presence, absence or phase-variable state of methyltransferase systems?
 
+## Current real-data panel
+
+The working Campylobacter development cohort contains 57 PacBio methylomes assembled from several historical/public strain panels rather than one ecological sampling design. This includes Penner serotype reference strains, published HS:19/GBS strains, wildlife/environment isolates, black-bear isolates and a *C. jejuni* subsp. *doylei* genome. That heterogeneity is useful for developing MOMENTO, but host-association analyses must use carefully defined ecological subsets.
+
 ## Why lineage matters
 
 Closely related bacteria share genome content and often share methylation systems. If a cattle-associated lineage carries a motif, a naive model may appear to predict cattle when it is only recognising the lineage. Host association therefore needs within-lineage evidence or grouped/phylogeny-aware validation.
+
+For the 57-genome development panel, build a core-genome phylogeny separately from the assembly FASTAs:
+
+```text
+57 assembly FASTAs
+      ↓
+Bakta or Prokka
+      ↓
+Panaroo or PIRATE
+      ↓
+core-gene alignment
+      ↓
+IQ-TREE
+      ↓
+phylogeny / lineage metadata for MOMENTO
+```
+
+The PacBio `*motifs.gff` files are methylation-call GFFs, **not** the gene-annotation GFFs required by Panaroo/PIRATE.
 
 ## RAATTY as a teaching example
 
@@ -59,6 +81,25 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+## Step 0: import a PacBio methylome
+
+The first working MOMENTO adapter converts a PacBio methylation GFF plus the matching assembly FASTA into the canonical motif table:
+
+```bash
+momento import-pacbio \
+  --gff RM1245motifs.gff \
+  --fasta CjRM1245.fasta \
+  --sample RM1245 \
+  --output RM1245.momento.tsv \
+  --sites-output RM1245.sites.tsv
+```
+
+The importer counts motif opportunities directly from the assembly, understands degenerate IUPAC motifs such as `RAATTY`, and retains the original GFF attributes in the optional site-level table.
+
+### First real-data acceptance test
+
+Before processing the full cohort, validate MOMENTO against the published RM1245 and RM1477 HS:19 methylomes. MOMENTO should approximately reproduce the published opportunity/call totals for motifs including `RAATTY`, `CATG` and `AGTNNNNNNRTTG` directly from primary FASTA + GFF inputs. Any discrepancy should be investigated before scaling to the remaining isolates.
 
 ## Step 1: validate
 
@@ -160,8 +201,8 @@ Motif summaries are only the first layer. With position-level GFFs, build sample
 ### Phase 1 — inventory
 Reconcile sample names across FASTA, motif GFF, modification CSV, old spreadsheets, metadata, phylogeny/ST/CC and platform.
 
-### Phase 2 — reproduce the historical result
-Programmatically rebuild the old curated motif spreadsheet from primary outputs. This is the first MOMENTO acceptance test.
+### Phase 2 — reproduce published/historical results
+First reproduce RM1245/RM1477 published methylome summaries, then programmatically rebuild the old curated motif spreadsheet from primary outputs. These are MOMENTO acceptance tests.
 
 ### Phase 3 — QC
 Use call counts, confidence, motif opportunities, core-motif behaviour, genome size and failed/empty-file checks.
