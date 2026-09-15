@@ -26,15 +26,23 @@ def test_iupac_and_reverse_complement_counting():
     assert count_genomic_opportunities(seqs, "GATC") == 1
 
 
+def test_old_pacbio_numeric_motif_position_suffix():
+    assert canonicalise_motif("RAATTY,2") == "RAATTY"
+    assert canonicalise_motif("CATG,1") == "CATG"
+    assert canonicalise_motif("AGTNNNNNNRTTG,0/CAAYNNNNNNACT,12") == "AGTNNNNNNRTTG/CAAYNNNNNNACT"
+    with pytest.raises(ValueError, match="Unsupported comma-delimited motif value"):
+        canonicalise_motif("RAATTY,unexpected")
+
+
 def test_import_pacbio_gff(tmp_path):
     fasta = tmp_path / "toy.fasta"
     fasta.write_text(">chr\nGAATTCAAATTTGATCGATC\n")
     gff = tmp_path / "toy.gff"
     gff.write_text(
         "##gff-version 3\n"
-        "chr\tkinModCall\tm6A\t2\t2\t42\t+\t.\tmotif=RAATTY;coverage=55\n"
-        "chr\tkinModCall\tm6A\t8\t8\t44\t+\t.\tmotif=RAATTY;coverage=60\n"
-        "chr\tkinModCall\tm6A\t14\t14\t50\t+\t.\tmotif=GATC;coverage=62\n"
+        "chr\tkinModCall\tm6A\t2\t2\t42\t+\t.\tmotif=RAATTY,2;coverage=55\n"
+        "chr\tkinModCall\tm6A\t8\t8\t44\t+\t.\tmotif=RAATTY,2;coverage=60\n"
+        "chr\tkinModCall\tm6A\t14\t14\t50\t+\t.\tmotif=GATC,1;coverage=62\n"
     )
     summary, sites = import_pacbio_gff(gff, fasta, "TOY")
     assert list(summary.columns) == [
@@ -47,7 +55,7 @@ def test_import_pacbio_gff(tmp_path):
     assert raatty.genomic_sites == 2
     assert math.isclose(raatty.methylated_fraction, 1.0)
     assert len(sites) == 3
-    assert sites.iloc[0].attributes_raw.startswith("motif=RAATTY")
+    assert sites.iloc[0].attributes_raw.startswith("motif=RAATTY,2")
 
 
 def test_import_fails_loudly_without_motif_attribute(tmp_path):
