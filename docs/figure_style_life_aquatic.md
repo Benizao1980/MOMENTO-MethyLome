@@ -57,12 +57,21 @@ assigned from the cool palette before adding new warm colours.
 
 ### Accessory methylome heatmap
 
-- Cluster isolates by Jaccard distance / average linkage.
-- Keep the sample dendrogram in charcoal or blue-grey.
-- Use white for absence and deep ocean blue for presence.
+- Cluster isolates by Jaccard distance / average linkage using the complete
+  accessory matrix.
+- Keep the sample dendrogram in blue-grey.
+- Use white for absence, deep ocean blue for m6A presence and coral for m4C.
 - Put categorical metadata in narrow annotation strips adjacent to the rows.
 - Keep RAATTY out of the accessory matrix; show the core backbone separately.
-- Use a small right-hand bar for the number of accessory features per isolate.
+- Use a small right-hand bar for the total number of accessory features per
+  isolate.
+- For the manuscript-facing heatmap, show features present in at least two
+  isolates by default. This is a display filter only: it does not change the
+  Jaccard clustering or the numerical analysis.
+- Always retain an all-feature supplementary heatmap and an ordered feature TSV
+  so singleton motifs remain auditable.
+- Keep the main annotation strips to host group and provenance unless the
+  additional metadata are sufficiently complete to justify extra tracks.
 
 ### PCoA
 
@@ -72,13 +81,18 @@ assigned from the cool palette before adding new warm colours.
 - Use charcoal point edges and restrained alpha.
 - Labels should be optional; use them for selected isolates rather than all
   points in the publication version.
+- Keep provenance marker shapes stable across re-runs.
 
 ### Prevalence and backbone plots
 
 - Horizontal bars are preferred when motif labels are long.
 - m6A is blue; m4C can use the coral accent.
+- Add small numeric prevalence labels to bar ends when space permits.
 - RAATTY is treated as the conserved backbone and should not be visually mixed
   into the accessory repertoire.
+- The RAATTY panel should focus its x-axis on the observed range rather than
+  wasting space from zero; a subtle 99% reference line may be shown as a visual
+  guide, not a biological threshold.
 
 ## Reproducibility
 
