@@ -4,12 +4,12 @@
 
 ## Manifest
 
-Required columns are:
+Required columns are `sample_id`, `fasta` and `gff`. An optional `note` column is copied into the cohort audit table for provenance decisions such as choosing an assembly version or using a header-corrected derived FASTA.
 
 ```text
-sample_id	fasta	gff
-RM1245	01_GENOMES_FASTA/CjRM1245.fasta	02_MOTIF_GFF/RM1245motifs.gff
-RM1477	01_GENOMES_FASTA/CjRM1477.fasta	02_MOTIF_GFF/RM1477motifs.gff
+sample_id	fasta	gff	note
+RM1245	01_GENOMES_FASTA/CjRM1245.fasta	02_MOTIF_GFF/RM1245motifs.gff	
+RM3427	01_GENOMES_FASTA/MOMENTO_CORRECTED/CjRM3427.momento.fasta	02_MOTIF_GFF/RM3427motifs.gff	corrected duplicate FASTA record IDs; sequence unchanged
 ```
 
 Relative paths are resolved relative to the manifest file. `sample_id` values must be unique.
@@ -64,7 +64,7 @@ samples/
 
 `cohort.momento.tsv` is the combined canonical long table for successfully imported samples.
 
-`cohort.qc.tsv` contains one row per manifest sample with input paths, context metrics, final QC status, motif-row count, total site assignments, included site assignments and any failure/warning message.
+`cohort.qc.tsv` contains one row per manifest sample with input paths, optional manifest provenance note, context metrics, final QC status, motif-row count, total site assignments, included site assignments and any failure/warning message.
 
 Sample-level errors do not abort the whole cohort. They are recorded as `FAIL` in the audit table and processing continues. Very small but technically parseable imports are labelled `LOW_DATA` using the same configurable threshold as `import-pacbio`.
 
