@@ -56,11 +56,19 @@ Default outputs are written as PNG, PDF and SVG:
 
 ```text
 figure_accessory_heatmap.*
+figure_accessory_heatmap_all_features.*
 figure_pcoa.*
 figure_accessory_prevalence.*
 figure_raatty_backbone.*
 heatmap_sample_order.tsv
+heatmap_feature_order.tsv
+heatmap_all_feature_order.tsv
 ```
+
+The main heatmap defaults to accessory families present in at least two PASS
+isolates. This is only a display filter: the dendrogram still comes from the
+full Jaccard/accessory matrix. The all-feature heatmap is written separately so
+singleton families remain available for supplementary review.
 
 The default styling is documented in:
 
@@ -69,6 +77,18 @@ docs/figure_style_life_aquatic.md
 ```
 
 ## 4. Useful plotting options
+
+Change the main-heatmap prevalence display threshold:
+
+```bash
+--heatmap-min-prevalence 3
+```
+
+Skip the supplementary all-feature heatmap while testing:
+
+```bash
+--skip-full-heatmap
+```
 
 Label every PCoA point for a diagnostic version:
 
@@ -87,6 +107,14 @@ Change heatmap annotation strips:
 ```bash
 --annotations host_group,provenance_class,st,clonal_complex
 ```
+
+The publication default is deliberately only:
+
+```text
+host_group,provenance_class
+```
+
+because the current ST/CC metadata are incomplete.
 
 Disable the shape mapping:
 
