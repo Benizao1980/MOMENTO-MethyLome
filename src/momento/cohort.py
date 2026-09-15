@@ -6,12 +6,18 @@ from typing import Optional
 
 import pandas as pd
 
-from .io.pacbio import import_pacbio_gff, iter_gff, read_fasta, reverse_complement_iupac
+from .io.pacbio import (
+    CANONICAL_COLUMNS,
+    import_pacbio_gff,
+    iter_gff,
+    read_fasta,
+    reverse_complement_iupac,
+)
 
 MANIFEST_REQUIRED_COLUMNS = ("sample_id", "fasta", "gff")
 AUDIT_COLUMNS = [
-    "sample_id", "fasta", "gff", "preflight_status", "context_usable",
-    "context_compared", "context_exact", "context_coverage",
+    "sample_id", "fasta", "gff", "manifest_note", "preflight_status",
+    "context_usable", "context_compared", "context_exact", "context_coverage",
     "context_concordance", "qc_status", "motif_rows", "site_assignments",
     "included_assignments", "message",
 ]
@@ -31,7 +37,7 @@ def load_manifest(path: str | Path) -> pd.DataFrame:
 
     Required columns are ``sample_id``, ``fasta`` and ``gff``. Relative paths
     are interpreted relative to the manifest file, making manifests portable
-    within a project directory.
+    within a project directory. Extra columns such as ``note`` are preserved.
     """
     manifest_path = Path(path)
     df = pd.read_csv(manifest_path, sep="\t", dtype=str).fillna("")
@@ -100,7 +106,12 @@ def context_preflight(
 
         observed = seq[left:right]
         if record["strand"] == "-":
-            observed = reverse_complement_iupac(observed)
+            try:
+                observed = reverse_complement_iupac(observed)
+            except KeyError as exc:
+                raise ValueError(
+                    f"Unsupported FASTA base {exc.args[0]!r} while checking {fasta_path}"
+                ) from exc
 
         compared += 1
         if observed == context:
@@ -168,6 +179,7 @@ def build_cohort(
             "sample_id": sample,
             "fasta": fasta,
             "gff": gff,
+            "manifest_note": row.get("note", ""),
             "preflight_status": "NOT_RUN",
             "context_usable": 0,
             "context_compared": 0,
@@ -242,7 +254,7 @@ def build_cohort(
         combined = pd.concat(summaries, ignore_index=True)
         combined = combined.sort_values(["sample_id", "motif", "modification"]).reset_index(drop=True)
     else:
-        combined = pd.DataFrame()
+        combined = pd.DataFrame(columns=CANONICAL_COLUMNS)
 
     audit_df = pd.DataFrame(audit_rows, columns=AUDIT_COLUMNS)
     combined.to_csv(outdir / "cohort.momento.tsv", sep="\t", index=False)
