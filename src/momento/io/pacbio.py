@@ -115,9 +115,26 @@ def choose_attribute(
     return hits[0] if len(hits) == 1 else None
 
 
+def _strip_pacbio_motif_position(text: str) -> str:
+    """Strip an old SMRT/MotifMaker numeric modified-base suffix.
+
+    Some PacBio motif GFF generations encode the motif attribute as e.g.
+    ``RAATTY,2`` rather than just ``RAATTY``.  The numeric suffix records the
+    modified-base position and is not part of the recognition sequence.  We
+    remove only purely numeric suffix fields; arbitrary comma-delimited text is
+    rejected rather than silently altered.
+    """
+    fields = [field.strip() for field in text.split(",")]
+    if len(fields) == 1:
+        return text
+    if fields[0] and all(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", field) for field in fields[1:] if field):
+        return fields[0]
+    raise ValueError(f"Unsupported comma-delimited motif value: {text!r}")
+
+
 def clean_motif_component(text: str) -> str:
-    """Convert common modified-base notation to a plain IUPAC motif."""
-    motif = text.strip().upper()
+    """Convert common PacBio/modified-base motif notation to plain IUPAC."""
+    motif = _strip_pacbio_motif_position(text.strip()).upper()
     for old, new in {
         "[6MA]": "A", "[M6A]": "A", "[4MC]": "C", "[M4C]": "C",
         "[5MC]": "C", "[M5C]": "C",
