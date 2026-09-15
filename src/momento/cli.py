@@ -28,17 +28,20 @@ def cmd_import_pacbio(a):
         a.sample,
         platform=a.platform,
         min_score=a.min_score,
+        min_identification_qv=a.min_identification_qv,
         motif_attribute=a.motif_attribute,
         modification_attribute=a.modification_attribute,
+        filter_cognate_positions=not a.keep_all_motif_positions,
     )
     Path(a.output).parent.mkdir(parents=True, exist_ok=True)
     summary.to_csv(a.output, sep="\t", index=False)
     if a.sites_output:
         Path(a.sites_output).parent.mkdir(parents=True, exist_ok=True)
         sites.to_csv(a.sites_output, sep="\t", index=False)
+    included = int(sites["included_in_summary"].sum()) if len(sites) else 0
     print(
         f"PASS: {a.sample}; {len(summary)} motif/modification rows; "
-        f"{len(sites):,} site calls -> {a.output}"
+        f"{included:,}/{len(sites):,} site-by-motif assignments included -> {a.output}"
     )
 
 
@@ -76,9 +79,25 @@ def build_parser():
     ip.add_argument("--fasta", required=True, help="matching assembly FASTA")
     ip.add_argument("--sample", required=True, help="stable MOMENTO sample ID")
     ip.add_argument("--output", required=True, help="motif-level MOMENTO TSV")
-    ip.add_argument("--sites-output", help="optional site-level TSV")
+    ip.add_argument("--sites-output", help="optional site-level TSV with QC/filter flags")
     ip.add_argument("--platform", default="pacbio")
-    ip.add_argument("--min-score", type=float)
+    ip.add_argument("--min-score", type=float, help="optional minimum GFF column-6 score")
+    ip.add_argument(
+        "--min-identification-qv",
+        type=float,
+        help=(
+            "optional minimum PacBio identificationQv; no universal default is "
+            "assumed because historical pipelines differ"
+        ),
+    )
+    ip.add_argument(
+        "--keep-all-motif-positions",
+        action="store_true",
+        help=(
+            "disable context-based cognate modified-position filtering; useful "
+            "for diagnostics and legacy comparisons"
+        ),
+    )
     ip.add_argument("--motif-attribute", help="force a non-standard GFF motif attribute key")
     ip.add_argument("--modification-attribute", help="force a non-standard modification attribute key")
     ip.set_defaults(func=cmd_import_pacbio)
