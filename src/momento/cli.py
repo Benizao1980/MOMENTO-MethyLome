@@ -13,6 +13,22 @@ def read_table(path):
     return pd.read_csv(path, sep="\t")
 
 
+def assess_import_status(summary, sites, low_data_threshold=100):
+    """Return a conservative import-level QC label.
+
+    ``LOW_DATA`` is a warning, not a failure: very small PacBio GFFs may be
+    technically valid but should not enter cohort analyses unnoticed. The
+    threshold is intentionally configurable because expected call counts depend
+    on organism and dataset.
+    """
+    n_sites = len(sites)
+    if n_sites < low_data_threshold:
+        return "LOW_DATA"
+    if len(summary) == 0:
+        return "NO_SUMMARY"
+    return "PASS"
+
+
 def cmd_validate(a):
     df = read_table(a.input)
     missing = missing_columns(df.columns, REQUIRED_METHYLATION_COLUMNS)
@@ -22,27 +38,43 @@ def cmd_validate(a):
 
 
 def cmd_import_pacbio(a):
-    summary, sites = import_pacbio_gff(
-        a.gff,
-        a.fasta,
-        a.sample,
-        platform=a.platform,
-        min_score=a.min_score,
-        min_identification_qv=a.min_identification_qv,
-        motif_attribute=a.motif_attribute,
-        modification_attribute=a.modification_attribute,
-        filter_cognate_positions=not a.keep_all_motif_positions,
-    )
+    try:
+        summary, sites = import_pacbio_gff(
+            a.gff,
+            a.fasta,
+            a.sample,
+            platform=a.platform,
+            min_score=a.min_score,
+            min_identification_qv=a.min_identification_qv,
+            motif_attribute=a.motif_attribute,
+            modification_attribute=a.modification_attribute,
+            filter_cognate_positions=not a.keep_all_motif_positions,
+        )
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"FAIL: {a.sample}: {exc}") from exc
+
+    status = assess_import_status(summary, sites, a.low_data_threshold)
+    summary = summary.copy()
+    summary["qc_status"] = status
+
     Path(a.output).parent.mkdir(parents=True, exist_ok=True)
     summary.to_csv(a.output, sep="\t", index=False)
     if a.sites_output:
         Path(a.sites_output).parent.mkdir(parents=True, exist_ok=True)
         sites.to_csv(a.sites_output, sep="\t", index=False)
+
     included = int(sites["included_in_summary"].sum()) if len(sites) else 0
+    prefix = "PASS" if status == "PASS" else status
     print(
-        f"PASS: {a.sample}; {len(summary)} motif/modification rows; "
+        f"{prefix}: {a.sample}; {len(summary)} motif/modification rows; "
         f"{included:,}/{len(sites):,} site-by-motif assignments included -> {a.output}"
     )
+    if status == "LOW_DATA":
+        print(
+            f"WARNING: only {len(sites):,} site-by-motif assignments were parsed "
+            f"(< --low-data-threshold {a.low_data_threshold:,}); review this sample "
+            "before cohort analysis."
+        )
 
 
 def cmd_matrix(a):
@@ -96,6 +128,15 @@ def build_parser():
         help=(
             "disable context-based cognate modified-position filtering; useful "
             "for diagnostics and legacy comparisons"
+        ),
+    )
+    ip.add_argument(
+        "--low-data-threshold",
+        type=int,
+        default=100,
+        help=(
+            "warn and set qc_status=LOW_DATA when fewer than this many "
+            "site-by-motif assignments are parsed (default: 100; warning only)"
         ),
     )
     ip.add_argument("--motif-attribute", help="force a non-standard GFF motif attribute key")
