@@ -6,27 +6,12 @@ from .schema import REQUIRED_METHYLATION_COLUMNS, missing_columns
 from .qc import motif_prevalence, flag_samples_by_core_motif
 from .matrix import build_matrix
 from .cluster import pca
+from .cohort import assess_import_status, build_cohort
 from .io.pacbio import import_pacbio_gff
 
 
 def read_table(path):
     return pd.read_csv(path, sep="\t")
-
-
-def assess_import_status(summary, sites, low_data_threshold=100):
-    """Return a conservative import-level QC label.
-
-    ``LOW_DATA`` is a warning, not a failure: very small PacBio GFFs may be
-    technically valid but should not enter cohort analyses unnoticed. The
-    threshold is intentionally configurable because expected call counts depend
-    on organism and dataset.
-    """
-    n_sites = len(sites)
-    if n_sites < low_data_threshold:
-        return "LOW_DATA"
-    if len(summary) == 0:
-        return "NO_SUMMARY"
-    return "PASS"
 
 
 def cmd_validate(a):
@@ -77,6 +62,35 @@ def cmd_import_pacbio(a):
         )
 
 
+def cmd_build_cohort(a):
+    try:
+        combined, audit = build_cohort(
+            a.manifest,
+            a.output_dir,
+            platform=a.platform,
+            min_score=a.min_score,
+            min_identification_qv=a.min_identification_qv,
+            motif_attribute=a.motif_attribute,
+            modification_attribute=a.modification_attribute,
+            filter_cognate_positions=not a.keep_all_motif_positions,
+            low_data_threshold=a.low_data_threshold,
+            min_context_coverage=a.min_context_coverage,
+            min_context_concordance=a.min_context_concordance,
+        )
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"FAIL: cohort: {exc}") from exc
+
+    counts = audit["qc_status"].value_counts().to_dict() if len(audit) else {}
+    status_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
+    imported = int((audit["qc_status"].isin(["PASS", "LOW_DATA", "NO_SUMMARY"])).sum()) if len(audit) else 0
+    print(
+        f"COHORT: {imported}/{len(audit)} samples imported; {len(combined):,} motif/modification rows"
+        + (f"; {status_text}" if status_text else "")
+    )
+    print(f"Summary: {Path(a.output_dir) / 'cohort.momento.tsv'}")
+    print(f"Audit:   {Path(a.output_dir) / 'cohort.qc.tsv'}")
+
+
 def cmd_matrix(a):
     df = read_table(a.input)
     exclude = [x for x in a.exclude.split(",") if x] if a.exclude else None
@@ -98,6 +112,38 @@ def cmd_cluster(a):
     pca(mat).to_csv(a.output, sep="\t")
 
 
+def add_pacbio_import_options(parser):
+    parser.add_argument("--platform", default="pacbio")
+    parser.add_argument("--min-score", type=float, help="optional minimum GFF column-6 score")
+    parser.add_argument(
+        "--min-identification-qv",
+        type=float,
+        help=(
+            "optional minimum PacBio identificationQv; no universal default is "
+            "assumed because historical pipelines differ"
+        ),
+    )
+    parser.add_argument(
+        "--keep-all-motif-positions",
+        action="store_true",
+        help=(
+            "disable context-based cognate modified-position filtering; useful "
+            "for diagnostics and legacy comparisons"
+        ),
+    )
+    parser.add_argument(
+        "--low-data-threshold",
+        type=int,
+        default=100,
+        help=(
+            "warn and set qc_status=LOW_DATA when fewer than this many "
+            "site-by-motif assignments are parsed (default: 100; warning only)"
+        ),
+    )
+    parser.add_argument("--motif-attribute", help="force a non-standard GFF motif attribute key")
+    parser.add_argument("--modification-attribute", help="force a non-standard modification attribute key")
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="momento", description="MOMENTO: comparative bacterial methylomics")
     sub = p.add_subparsers(dest="command", required=True)
@@ -112,36 +158,33 @@ def build_parser():
     ip.add_argument("--sample", required=True, help="stable MOMENTO sample ID")
     ip.add_argument("--output", required=True, help="motif-level MOMENTO TSV")
     ip.add_argument("--sites-output", help="optional site-level TSV with QC/filter flags")
-    ip.add_argument("--platform", default="pacbio")
-    ip.add_argument("--min-score", type=float, help="optional minimum GFF column-6 score")
-    ip.add_argument(
-        "--min-identification-qv",
-        type=float,
-        help=(
-            "optional minimum PacBio identificationQv; no universal default is "
-            "assumed because historical pipelines differ"
-        ),
-    )
-    ip.add_argument(
-        "--keep-all-motif-positions",
-        action="store_true",
-        help=(
-            "disable context-based cognate modified-position filtering; useful "
-            "for diagnostics and legacy comparisons"
-        ),
-    )
-    ip.add_argument(
-        "--low-data-threshold",
-        type=int,
-        default=100,
-        help=(
-            "warn and set qc_status=LOW_DATA when fewer than this many "
-            "site-by-motif assignments are parsed (default: 100; warning only)"
-        ),
-    )
-    ip.add_argument("--motif-attribute", help="force a non-standard GFF motif attribute key")
-    ip.add_argument("--modification-attribute", help="force a non-standard modification attribute key")
+    add_pacbio_import_options(ip)
     ip.set_defaults(func=cmd_import_pacbio)
+
+    bc = sub.add_parser(
+        "build-cohort",
+        help="import a manifest-defined PacBio cohort with FASTA/GFF preflight QC",
+    )
+    bc.add_argument(
+        "--manifest",
+        required=True,
+        help="TSV with required columns sample_id, fasta, gff; relative paths resolve from the manifest",
+    )
+    bc.add_argument("--output-dir", required=True, help="cohort output directory")
+    bc.add_argument(
+        "--min-context-coverage",
+        type=float,
+        default=0.95,
+        help="minimum fraction of GFF contexts comparable to the FASTA (default: 0.95)",
+    )
+    bc.add_argument(
+        "--min-context-concordance",
+        type=float,
+        default=0.99,
+        help="minimum exact-match fraction among compared contexts (default: 0.99)",
+    )
+    add_pacbio_import_options(bc)
+    bc.set_defaults(func=cmd_build_cohort)
 
     m = sub.add_parser("matrix")
     m.add_argument("--input", required=True)
