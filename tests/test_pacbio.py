@@ -50,7 +50,9 @@ def test_motif_position_from_pacbio_context():
 def test_old_pacbio_numeric_motif_position_suffix():
     assert canonicalise_motif("RAATTY,2") == "RAATTY"
     assert canonicalise_motif("CATG,1") == "CATG"
-    assert canonicalise_motif("AGTNNNNNNRTTG,0/CAAYNNNNNNACT,12") == "AGTNNNNNNRTTG/CAAYNNNNNNACT"
+    assert canonicalise_motif(
+        "AGTNNNNNNRTTG,0/CAAYNNNNNNACT,12"
+    ) == "AGTNNNNNNRTTG/CAAYNNNNNNACT"
     with pytest.raises(ValueError, match="Unsupported comma-delimited motif value"):
         canonicalise_motif("RAATTY,unexpected")
 
@@ -92,8 +94,7 @@ def test_import_infers_cognate_position_and_keeps_excluded_sites(tmp_path):
     raatty = summary.loc[summary.motif == "RAATTY"].iloc[0]
     assert raatty.called_sites == 2
     assert raatty.genomic_sites == 4
-    assert math.isclose(raattey_fraction := raatty.methylated_fraction, 0.5)
-    assert raattey_fraction == 0.5
+    assert math.isclose(raatty.methylated_fraction, 0.5)
 
     # All five site assignments are retained for audit/QC even though only two
     # pass both cognate-position and identification-QV filters.
@@ -102,7 +103,9 @@ def test_import_infers_cognate_position_and_keeps_excluded_sites(tmp_path):
     assert sites.included_in_summary.sum() == 2
     assert (~sites.passes_motif_position).sum() == 2
     assert (~sites.passes_identification_qv).sum() == 3
-    assert set(sites.cognate_position_source) == {"highest_median_identification_qv"}
+    assert set(sites.cognate_position_source) == {
+        "highest_median_identification_qv"
+    }
 
 
 def test_import_without_context_falls_back_to_legacy_counting(tmp_path):
@@ -125,6 +128,11 @@ def test_import_fails_loudly_without_motif_attribute(tmp_path):
     fasta = tmp_path / "toy.fasta"
     fasta.write_text(">chr\nGAATTC\n")
     gff = tmp_path / "toy.gff"
-    gff.write_text("chr\tkinModCall\tm6A\t2\t2\t42\t+\t.\tcoverage=55;context=NNGAATTCNN\n")
-    with pytest.raises(ValueError, match="Could not identify an explicit motif attribute"):
+    gff.write_text(
+        "chr\tkinModCall\tm6A\t2\t2\t42\t+\t.\t"
+        "coverage=55;context=NNGAATTCNN\n"
+    )
+    with pytest.raises(
+        ValueError, match="Could not identify an explicit motif attribute"
+    ):
         import_pacbio_gff(gff, fasta, "TOY")
