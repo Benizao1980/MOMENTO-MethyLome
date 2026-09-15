@@ -17,8 +17,9 @@ MANIFEST_REQUIRED_COLUMNS = ("sample_id", "fasta", "gff")
 AUDIT_COLUMNS = [
     "sample_id", "fasta", "gff", "manifest_note", "preflight_status",
     "context_usable", "context_compared", "context_exact", "context_coverage",
-    "context_concordance", "qc_status", "motif_rows", "site_assignments",
-    "included_assignments", "message",
+    "context_concordance", "gff_feature_records", "gff_matched_records",
+    "gff_span_fraction", "gff_bin_coverage_fraction", "qc_status",
+    "motif_rows", "site_assignments", "included_assignments", "message",
 ]
 _SEQUENCE_COMPLEMENT = str.maketrans(
     "ACGTRYMKSWBDHVNacgtrymkswbdhvn",
@@ -35,6 +36,55 @@ def _reverse_complement_sequence(sequence: str) -> str:
     complemented; unsupported symbols are retained after reversal.
     """
     return sequence.translate(_SEQUENCE_COMPLEMENT)[::-1].upper()
+
+
+def _coordinate_coverage_metrics(
+    seqs: dict[str, str],
+    positions_by_seqid: dict[str, list[int]],
+    *,
+    bins: int = 20,
+) -> tuple[float, float]:
+    """Return genome-weighted GFF span and occupied-bin coverage fractions.
+
+    ``gff_span_fraction`` measures the summed min-to-max coordinate span of GFF
+    feature records on each FASTA record, weighted by FASTA length.
+    ``gff_bin_coverage_fraction`` divides each FASTA record into equal genomic
+    bins and asks what fraction of genome length lies in bins containing at
+    least one GFF feature record. The latter catches large internal gaps that a
+    simple min/max span can miss.
+    """
+    if bins < 1:
+        raise ValueError("bins must be at least 1")
+
+    genome_bases = sum(len(seq) for seq in seqs.values())
+    if genome_bases == 0:
+        return 0.0, 0.0
+
+    span_bases = 0
+    occupied_bases = 0
+
+    for seqid, seq in seqs.items():
+        length = len(seq)
+        positions = positions_by_seqid.get(seqid, [])
+        if not positions or length == 0:
+            continue
+
+        valid_positions = [pos for pos in positions if 1 <= pos <= length]
+        if not valid_positions:
+            continue
+
+        span_bases += max(valid_positions) - min(valid_positions) + 1
+
+        occupied_bins = {
+            min(int((pos - 1) / length * bins), bins - 1)
+            for pos in valid_positions
+        }
+        for bin_index in occupied_bins:
+            left = (bin_index * length) // bins
+            right = ((bin_index + 1) * length) // bins
+            occupied_bases += right - left
+
+    return span_bases / genome_bases, occupied_bases / genome_bases
 
 
 def assess_import_status(summary: pd.DataFrame, sites: pd.DataFrame, low_data_threshold: int = 100) -> str:
@@ -85,30 +135,57 @@ def context_preflight(
     *,
     min_coverage: float = 0.95,
     min_concordance: float = 0.99,
+    min_gff_span_fraction: float = 0.90,
+    min_gff_bin_coverage: float = 0.80,
+    min_gff_records_for_span: int = 1000,
+    gff_span_bins: int = 20,
 ) -> dict:
-    """Check whether PacBio context sequences agree with the nominated FASTA.
+    """Check PacBio GFF/FASTA identity and whether the GFF spans the genome.
 
     ``context_coverage`` is the fraction of context-bearing GFF records that can
     be compared to the FASTA. ``context_concordance`` is the fraction of those
-    compared records that match exactly. FASTA parsing is intentionally strict,
-    so duplicate record IDs are a hard preflight error rather than being
-    silently overwritten.
+    compared records that match exactly. ``gff_span_fraction`` and
+    ``gff_bin_coverage_fraction`` use all GFF feature records to identify
+    partial/truncated modification files that can otherwise make unassessed
+    genomic regions look biologically unmethylated.
+
+    Coordinate-span QC is applied only when at least
+    ``min_gff_records_for_span`` feature records are present, so genuinely sparse
+    legacy GFFs remain governed by LOW_DATA rather than being misclassified as
+    truncated. FASTA parsing is intentionally strict, so duplicate record IDs
+    are a hard preflight error rather than being silently overwritten.
     """
     if not 0 <= min_coverage <= 1:
         raise ValueError("min_coverage must be between 0 and 1")
     if not 0 <= min_concordance <= 1:
         raise ValueError("min_concordance must be between 0 and 1")
+    if not 0 <= min_gff_span_fraction <= 1:
+        raise ValueError("min_gff_span_fraction must be between 0 and 1")
+    if not 0 <= min_gff_bin_coverage <= 1:
+        raise ValueError("min_gff_bin_coverage must be between 0 and 1")
+    if min_gff_records_for_span < 1:
+        raise ValueError("min_gff_records_for_span must be at least 1")
+    if gff_span_bins < 1:
+        raise ValueError("gff_span_bins must be at least 1")
 
     seqs = read_fasta(fasta_path)
     usable = compared = exact = 0
+    gff_feature_records = 0
+    gff_matched_records = 0
+    positions_by_seqid: dict[str, list[int]] = {seqid: [] for seqid in seqs}
 
     for record in iter_gff(gff_path):
+        gff_feature_records += 1
+        seq = seqs.get(record["seqid"])
+        if seq is not None:
+            gff_matched_records += 1
+            positions_by_seqid[record["seqid"]].append(record["start"])
+
         context = (record["attributes"].get("context") or "").upper().strip()
         if not context or len(context) % 2 == 0:
             continue
         usable += 1
 
-        seq = seqs.get(record["seqid"])
         if seq is None:
             continue
 
@@ -128,16 +205,42 @@ def context_preflight(
 
     coverage: Optional[float] = compared / usable if usable else None
     concordance: Optional[float] = exact / compared if compared else None
+    gff_span_fraction, gff_bin_coverage_fraction = _coordinate_coverage_metrics(
+        seqs,
+        positions_by_seqid,
+        bins=gff_span_bins,
+    )
 
-    if usable == 0:
-        status = "NO_CONTEXT"
-        message = "No odd-length context attributes available; sequence concordance not assessed"
-    elif coverage is None or coverage < min_coverage:
+    span_assessed = gff_feature_records >= min_gff_records_for_span
+
+    if gff_feature_records > 0 and gff_matched_records == 0:
+        status = "FAIL"
+        message = "No GFF feature seqids matched any FASTA record ID"
+    elif usable and (coverage is None or coverage < min_coverage):
         status = "FAIL"
         message = f"Context coverage {coverage or 0:.4f} is below minimum {min_coverage:.4f}"
-    elif concordance is None or concordance < min_concordance:
+    elif usable and (concordance is None or concordance < min_concordance):
         status = "FAIL"
         message = f"Context concordance {concordance or 0:.4f} is below minimum {min_concordance:.4f}"
+    elif span_assessed and (
+        gff_span_fraction < min_gff_span_fraction
+        or gff_bin_coverage_fraction < min_gff_bin_coverage
+    ):
+        status = "PARTIAL_GFF"
+        reasons = []
+        if gff_span_fraction < min_gff_span_fraction:
+            reasons.append(
+                f"coordinate span {gff_span_fraction:.4f} < {min_gff_span_fraction:.4f}"
+            )
+        if gff_bin_coverage_fraction < min_gff_bin_coverage:
+            reasons.append(
+                "occupied-bin genome fraction "
+                f"{gff_bin_coverage_fraction:.4f} < {min_gff_bin_coverage:.4f}"
+            )
+        message = "Partial/truncated GFF suspected: " + "; ".join(reasons)
+    elif usable == 0:
+        status = "NO_CONTEXT"
+        message = "No odd-length context attributes available; sequence concordance not assessed"
     else:
         status = "PASS"
         message = ""
@@ -149,6 +252,10 @@ def context_preflight(
         "context_exact": exact,
         "context_coverage": coverage,
         "context_concordance": concordance,
+        "gff_feature_records": gff_feature_records,
+        "gff_matched_records": gff_matched_records,
+        "gff_span_fraction": gff_span_fraction,
+        "gff_bin_coverage_fraction": gff_bin_coverage_fraction,
         "message": message,
     }
 
@@ -166,12 +273,17 @@ def build_cohort(
     low_data_threshold: int = 100,
     min_context_coverage: float = 0.95,
     min_context_concordance: float = 0.99,
+    min_gff_span_fraction: float = 0.90,
+    min_gff_bin_coverage: float = 0.80,
+    min_gff_records_for_span: int = 1000,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Import all manifest samples, continuing past sample-level failures.
 
     Per-sample outputs are written under ``samples/<sample_id>/``. Cohort-level
     outputs are ``cohort.momento.tsv`` and ``cohort.qc.tsv``. A failed sample is
     recorded in the audit table but does not abort the remaining cohort.
+    ``PARTIAL_GFF`` samples are imported for auditing but retain that QC label so
+    they are excluded automatically by analyses restricted to PASS samples.
     """
     manifest = load_manifest(manifest_path)
     outdir = Path(output_dir)
@@ -195,6 +307,10 @@ def build_cohort(
             "context_exact": 0,
             "context_coverage": None,
             "context_concordance": None,
+            "gff_feature_records": 0,
+            "gff_matched_records": 0,
+            "gff_span_fraction": None,
+            "gff_bin_coverage_fraction": None,
             "qc_status": "FAIL",
             "motif_rows": 0,
             "site_assignments": 0,
@@ -208,6 +324,9 @@ def build_cohort(
                 fasta,
                 min_coverage=min_context_coverage,
                 min_concordance=min_context_concordance,
+                min_gff_span_fraction=min_gff_span_fraction,
+                min_gff_bin_coverage=min_gff_bin_coverage,
+                min_gff_records_for_span=min_gff_records_for_span,
             )
             audit.update(preflight)
         except (OSError, ValueError) as exc:
@@ -237,7 +356,12 @@ def build_cohort(
             audit_rows.append(audit)
             continue
 
-        status = assess_import_status(summary, sites, low_data_threshold)
+        import_status = assess_import_status(summary, sites, low_data_threshold)
+        status = (
+            "PARTIAL_GFF"
+            if audit["preflight_status"] == "PARTIAL_GFF"
+            else import_status
+        )
         summary = summary.copy()
         summary["qc_status"] = status
 
@@ -250,7 +374,7 @@ def build_cohort(
         audit["motif_rows"] = len(summary)
         audit["site_assignments"] = len(sites)
         audit["included_assignments"] = int(sites["included_in_summary"].sum()) if len(sites) else 0
-        if status == "LOW_DATA" and not audit["message"]:
+        if import_status == "LOW_DATA" and not audit["message"]:
             audit["message"] = (
                 f"Only {len(sites)} site-by-motif assignments parsed "
                 f"(< low-data threshold {low_data_threshold})"
