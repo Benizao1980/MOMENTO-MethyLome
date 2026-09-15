@@ -42,7 +42,10 @@ CANONICAL_COLUMNS = [
 ]
 SITE_COLUMNS = [
     "sample_id", "seqid", "start", "end", "strand", "motif",
-    "modification", "score", "motif_attribute", "source", "feature_type",
+    "modification", "score", "identification_qv", "context",
+    "motif_position", "cognate_position", "cognate_position_source",
+    "passes_score", "passes_identification_qv", "passes_motif_position",
+    "included_in_summary", "motif_attribute", "source", "feature_type",
     "attributes_raw",
 ]
 NUMERIC_TOKEN_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")
@@ -120,15 +123,15 @@ def _strip_pacbio_motif_position(text: str) -> str:
     """Strip an old SMRT/MotifMaker numeric modified-base suffix.
 
     Some PacBio motif GFF generations encode one motif as e.g. ``RAATTY,2``.
-    The numeric suffix records the modified-base position and is not part of the
-    recognition sequence.  This helper intentionally handles only the single-
-    motif case; comma-separated lists of overlapping motifs are handled by
-    :func:`canonicalise_motif_values`.
+    The numeric suffix records modified-base-position metadata and is not part
+    of the recognition sequence.
     """
     fields = [field.strip() for field in text.split(",")]
     if len(fields) == 1:
         return text
-    if fields[0] and all(NUMERIC_TOKEN_RE.fullmatch(field) for field in fields[1:] if field):
+    if fields[0] and all(
+        NUMERIC_TOKEN_RE.fullmatch(field) for field in fields[1:] if field
+    ):
         return fields[0]
     raise ValueError(f"Unsupported comma-delimited motif value: {text!r}")
 
@@ -164,20 +167,14 @@ def canonicalise_motif_values(raw: str) -> list[str]:
     Older PacBio/MotifMaker GFFs use commas in two different ways:
 
     * ``RAATTY,2`` -- one motif plus numeric modified-base-position metadata;
-    * ``GCCAA,RAATTY`` -- one modification call assigned to two overlapping
-      recognised motifs.
+    * ``GCCAA,RAATTY`` -- one modification call assigned to overlapping motifs.
 
-    Partner motifs containing ``/`` retain their paired representation.  For a
-    comma-separated motif list, the importer explodes the call to one assignment
-    per motif.  Numeric comma fields are ignored as metadata.  Duplicate motif
-    names are de-duplicated while preserving their input order.
+    Partner motifs containing ``/`` retain their paired representation.
     """
     raw = raw.strip()
     if not raw:
         raise ValueError("Empty motif value")
 
-    # Paired motifs can themselves contain numeric position suffixes on each
-    # component, e.g. MOTIF,0/PARTNER,12. canonicalise_motif handles this.
     if "/" in raw:
         return [canonicalise_motif(raw)]
 
@@ -185,8 +182,9 @@ def canonicalise_motif_values(raw: str) -> list[str]:
     if not fields:
         raise ValueError(f"Empty motif value: {raw!r}")
 
-    # Classic one-motif + modified-position form.
-    if len(fields) == 1 or all(NUMERIC_TOKEN_RE.fullmatch(field) for field in fields[1:]):
+    if len(fields) == 1 or all(
+        NUMERIC_TOKEN_RE.fullmatch(field) for field in fields[1:]
+    ):
         return [canonicalise_motif(raw)]
 
     motifs: list[str] = []
@@ -206,7 +204,7 @@ def reverse_complement_iupac(motif: str) -> str:
 
 
 def distinct_orientation_patterns(canonical_motif: str) -> list[str]:
-    """Return unique explicit recognition strings plus reverse complements."""
+    """Return unique recognition strings plus their reverse complements."""
     patterns: set[str] = set()
     for component in canonical_motif.split("/"):
         patterns.add(component)
@@ -222,9 +220,126 @@ def _iupac_pattern(motif: str) -> re.Pattern[str]:
 def count_genomic_opportunities(
     seqs: Dict[str, str], canonical_motif: str
 ) -> int:
-    """Count overlapping motif opportunities across all assembly sequences."""
+    """Count physical motif occurrences across all assembly sequences.
+
+    Reverse-complement-equivalent patterns are de-duplicated. For a
+    self-reverse-complementary motif this therefore counts each physical motif
+    once. Use :func:`count_genomic_target_sites` when a strand-specific
+    modified-base position is known.
+    """
     patterns = [_iupac_pattern(x) for x in distinct_orientation_patterns(canonical_motif)]
-    return sum(sum(1 for _ in pattern.finditer(seq)) for seq in seqs.values() for pattern in patterns)
+    return sum(
+        sum(1 for _ in pattern.finditer(seq))
+        for seq in seqs.values()
+        for pattern in patterns
+    )
+
+
+def count_genomic_target_sites(
+    seqs: Dict[str, str],
+    canonical_motif: str,
+    cognate_position: Optional[int],
+) -> int:
+    """Count strand-specific methylatable target sites.
+
+    For a single self-reverse-complementary motif, a physical motif occurrence
+    contains one target on each DNA strand once a cognate modified position is
+    defined. Therefore the strand-specific opportunity count is twice the
+    physical motif count. Non-palindromic motifs are already represented by
+    their two distinct orientations in :func:`count_genomic_opportunities`.
+    """
+    physical = count_genomic_opportunities(seqs, canonical_motif)
+    components = canonical_motif.split("/")
+    if (
+        cognate_position is not None
+        and len(components) == 1
+        and reverse_complement_iupac(components[0]) == components[0]
+    ):
+        return physical * 2
+    return physical
+
+
+def motif_positions_in_context(context: str, canonical_motif: str) -> list[int]:
+    """Return 1-based positions of the context-centre base within a motif.
+
+    PacBio/MotifMaker ``context`` strings place the called base at the centre.
+    The function tests each slash-separated motif component and returns every
+    distinct motif-relative position whose match covers the centre base.
+    """
+    context = (context or "").upper().strip()
+    if not context:
+        return []
+    centre = len(context) // 2
+    positions: set[int] = set()
+    for component in canonical_motif.split("/"):
+        pattern = _iupac_pattern(component)
+        for match in pattern.finditer(context):
+            start = match.start()
+            if start <= centre < start + len(component):
+                positions.add(centre - start + 1)
+    return sorted(positions)
+
+
+def _finite_float(value: object) -> Optional[float]:
+    if value in (None, "", "."):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def infer_cognate_position(
+    rows: Sequence[dict],
+    *,
+    min_median_qv_delta: float = 20.0,
+) -> tuple[Optional[int], str]:
+    """Infer the cognate modified-base position for one motif/modification.
+
+    The inference is deliberately conservative:
+
+    * one observed motif position -> use it;
+    * multiple positions -> use the position with the highest median
+      ``identificationQv`` only when it exceeds the runner-up by at least
+      ``min_median_qv_delta``;
+    * otherwise leave the position unresolved and do not position-filter.
+
+    This prevents a motif annotation alone from being treated as proof that
+    every called base inside that motif is the biologically cognate target.
+    """
+    by_position: dict[int, list[dict]] = defaultdict(list)
+    for row in rows:
+        position = row.get("motif_position")
+        if isinstance(position, int):
+            by_position[position].append(row)
+
+    if not by_position:
+        return None, "no_context_position"
+    if len(by_position) == 1:
+        return next(iter(by_position)), "single_observed_position"
+
+    qv_medians: list[tuple[float, int]] = []
+    for position, pos_rows in by_position.items():
+        qvs = [
+            float(row["identification_qv"])
+            for row in pos_rows
+            if row.get("identification_qv") is not None
+            and math.isfinite(float(row["identification_qv"]))
+        ]
+        if qvs:
+            qv_medians.append((statistics.median(qvs), position))
+
+    qv_medians.sort(reverse=True)
+    if len(qv_medians) >= 2:
+        best_qv, best_position = qv_medians[0]
+        second_qv = qv_medians[1][0]
+        if best_qv - second_qv >= min_median_qv_delta:
+            return best_position, "highest_median_identification_qv"
+    elif len(qv_medians) == 1:
+        return qv_medians[0][1], "only_position_with_identification_qv"
+
+    return None, "ambiguous_multiple_positions"
 
 
 def iter_gff(path: str | Path) -> Iterable[dict]:
@@ -235,7 +350,9 @@ def iter_gff(path: str | Path) -> Iterable[dict]:
                 continue
             cols = raw.rstrip("\n").split("\t")
             if len(cols) < 9:
-                raise ValueError(f"{path}:{line_no}: expected 9 GFF columns, found {len(cols)}")
+                raise ValueError(
+                    f"{path}:{line_no}: expected 9 GFF columns, found {len(cols)}"
+                )
             yield {
                 "line_no": line_no,
                 "seqid": cols[0],
@@ -258,19 +375,28 @@ def import_pacbio_gff(
     *,
     platform: str = "pacbio",
     min_score: Optional[float] = None,
+    min_identification_qv: Optional[float] = None,
     motif_attribute: Optional[str] = None,
     modification_attribute: Optional[str] = None,
+    filter_cognate_positions: bool = True,
+    min_cognate_qv_delta: float = 20.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Import one PacBio methylation GFF and matching assembly.
 
-    Returns ``(motif_summary, site_table)``. The site table preserves the raw GFF
-    attribute field for reproducibility and later position-level analyses.  If a
-    single GFF record is assigned to multiple overlapping motifs, the site table
-    contains one row per site x motif assignment.
+    The importer first preserves all motif assignments in a site table. When a
+    PacBio ``context`` attribute is available it determines the called base's
+    motif-relative position, then infers the cognate modified position for each
+    motif/modification combination. Position filtering is applied only when the
+    inference is unambiguous.
+
+    ``min_identification_qv`` is optional and deliberately has no universal
+    default. Different historical PacBio pipelines can use different confidence
+    conventions. Calls excluded from the motif summary remain in the site table
+    with explicit pass/fail flags.
+
+    Returns ``(motif_summary, site_table)``.
     """
     seqs = read_fasta(fasta_path)
-    grouped: Counter[tuple[str, str]] = Counter()
-    scores: dict[tuple[str, str], list[float]] = defaultdict(list)
     sites: list[dict] = []
     observed_keys: Counter[str] = Counter()
     examples: list[str] = []
@@ -282,32 +408,54 @@ def import_pacbio_gff(
         observed_keys.update(attrs.keys())
         if len(examples) < 3:
             examples.append(str(rec["attributes_raw"]))
-        score = rec["score"]
-        if min_score is not None and score is not None and score < min_score:
-            continue
+
         motif_key = choose_attribute(attrs, motif_attribute, MOTIF_KEY_PRIORITY)
         if motif_key is None or not attrs.get(motif_key):
             continue
+
         motifs = canonicalise_motif_values(attrs[motif_key])
-        mod_key = choose_attribute(attrs, modification_attribute, MODIFICATION_KEY_PRIORITY)
-        modification = attrs[mod_key] if mod_key and attrs.get(mod_key) else str(rec["feature_type"])
+        mod_key = choose_attribute(
+            attrs, modification_attribute, MODIFICATION_KEY_PRIORITY
+        )
+        modification = (
+            attrs[mod_key]
+            if mod_key and attrs.get(mod_key)
+            else str(rec["feature_type"])
+        )
+        score = rec["score"]
+        identification_qv = _finite_float(attrs.get("identificationQv"))
+        context = attrs.get("context", "")
 
         for motif in motifs:
-            key = (motif, modification)
-            grouped[key] += 1
-            if score is not None and math.isfinite(score):
-                scores[key].append(float(score))
+            positions = motif_positions_in_context(context, motif)
+            motif_position = positions[0] if len(positions) == 1 else None
             sites.append({
                 "sample_id": sample_id,
-                "seqid": rec["seqid"], "start": rec["start"], "end": rec["end"],
-                "strand": rec["strand"], "motif": motif, "modification": modification,
-                "score": score, "motif_attribute": motif_key, "source": rec["source"],
-                "feature_type": rec["feature_type"], "attributes_raw": rec["attributes_raw"],
+                "seqid": rec["seqid"],
+                "start": rec["start"],
+                "end": rec["end"],
+                "strand": rec["strand"],
+                "motif": motif,
+                "modification": modification,
+                "score": score,
+                "identification_qv": identification_qv,
+                "context": context,
+                "motif_position": motif_position,
+                "cognate_position": None,
+                "cognate_position_source": "",
+                "passes_score": True,
+                "passes_identification_qv": True,
+                "passes_motif_position": True,
+                "included_in_summary": True,
+                "motif_attribute": motif_key,
+                "source": rec["source"],
+                "feature_type": rec["feature_type"],
+                "attributes_raw": rec["attributes_raw"],
             })
 
     if feature_count == 0:
         raise ValueError(f"No feature records found in {gff_path}")
-    if not grouped:
+    if not sites:
         keys = ", ".join(key for key, _ in observed_keys.most_common()) or "<none>"
         preview = " | ".join(examples) or "<none>"
         raise ValueError(
@@ -316,14 +464,83 @@ def import_pacbio_gff(
             "If the motif uses another field, pass motif_attribute explicitly."
         )
 
-    opportunity_cache: dict[str, int] = {}
+    rows_by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in sites:
+        rows_by_key[(row["motif"], row["modification"])].append(row)
+
+    cognate_by_key: dict[tuple[str, str], Optional[int]] = {}
+    cognate_source_by_key: dict[tuple[str, str], str] = {}
+    for key, key_rows in rows_by_key.items():
+        cognate, source = infer_cognate_position(
+            key_rows, min_median_qv_delta=min_cognate_qv_delta
+        )
+        cognate_by_key[key] = cognate
+        cognate_source_by_key[key] = source
+
+    for row in sites:
+        key = (row["motif"], row["modification"])
+        cognate = cognate_by_key[key]
+        row["cognate_position"] = cognate
+        row["cognate_position_source"] = cognate_source_by_key[key]
+
+        score = row["score"]
+        row["passes_score"] = (
+            min_score is None
+            or score is None
+            or (math.isfinite(float(score)) and float(score) >= min_score)
+        )
+
+        identification_qv = row["identification_qv"]
+        row["passes_identification_qv"] = (
+            min_identification_qv is None
+            or (
+                identification_qv is not None
+                and math.isfinite(float(identification_qv))
+                and float(identification_qv) >= min_identification_qv
+            )
+        )
+
+        motif_position = row["motif_position"]
+        row["passes_motif_position"] = (
+            not filter_cognate_positions
+            or cognate is None
+            or motif_position is None
+            or motif_position == cognate
+        )
+
+        row["included_in_summary"] = bool(
+            row["passes_score"]
+            and row["passes_identification_qv"]
+            and row["passes_motif_position"]
+        )
+
+    grouped: Counter[tuple[str, str]] = Counter()
+    scores: dict[tuple[str, str], list[float]] = defaultdict(list)
+    for row in sites:
+        if not row["included_in_summary"]:
+            continue
+        key = (row["motif"], row["modification"])
+        grouped[key] += 1
+        score = row["score"]
+        if score is not None and math.isfinite(float(score)):
+            scores[key].append(float(score))
+
+    opportunity_cache: dict[tuple[str, Optional[int]], int] = {}
     summary_rows: list[dict] = []
     for (motif, modification), called_sites in sorted(grouped.items()):
-        genomic_sites = opportunity_cache.setdefault(
-            motif, count_genomic_opportunities(seqs, motif)
-        )
+        cognate = cognate_by_key[(motif, modification)]
+        opportunity_key = (motif, cognate)
+        if opportunity_key not in opportunity_cache:
+            opportunity_cache[opportunity_key] = count_genomic_target_sites(
+                seqs, motif, cognate
+            )
+        genomic_sites = opportunity_cache[opportunity_key]
         fraction = called_sites / genomic_sites if genomic_sites else math.nan
-        median_score = statistics.median(scores[(motif, modification)]) if scores[(motif, modification)] else math.nan
+        median_score = (
+            statistics.median(scores[(motif, modification)])
+            if scores[(motif, modification)]
+            else math.nan
+        )
         summary_rows.append({
             "sample_id": sample_id,
             "platform": platform,
@@ -358,7 +575,9 @@ def standardise_summary_table(
         "modification": df.get("modification", "unknown"),
         "called_sites": pd.to_numeric(df[count_col], errors="coerce"),
         "genomic_sites": pd.to_numeric(df.get("genomic_sites"), errors="coerce"),
-        "methylated_fraction": pd.to_numeric(df.get("methylated_fraction"), errors="coerce"),
+        "methylated_fraction": pd.to_numeric(
+            df.get("methylated_fraction"), errors="coerce"
+        ),
         "median_score": pd.to_numeric(df.get("median_score"), errors="coerce"),
         "source_file": str(path),
         "qc_status": "UNASSESSED",
