@@ -60,7 +60,7 @@ momento --help
 
 ## First working importer: PacBio
 
-`momento import-pacbio` converts a PacBio methylation-site GFF plus the matching assembly FASTA into MOMENTO's canonical motif summary. The assembly is used to count genomic motif opportunities, so raw called-site counts can be converted to methylated fractions.
+`momento import-pacbio` converts a PacBio methylation-site GFF plus the matching assembly FASTA into MOMENTO's canonical motif summary. The assembly is used to count genomic methylatable target opportunities, so raw called-site counts can be converted to methylated fractions.
 
 ```bash
 momento import-pacbio \
@@ -71,7 +71,31 @@ momento import-pacbio \
   --sites-output RM1245.sites.tsv
 ```
 
-The importer supports IUPAC motifs such as `RAATTY`, handles reverse complements, preserves site-level GFF attributes, and fails loudly if an explicit motif field cannot be identified instead of guessing from sequence context.
+The importer supports IUPAC motifs such as `RAATTY`, handles reverse complements and older comma-encoded MotifMaker fields, and preserves the original GFF attributes in the site-level output.
+
+### Why motif position matters
+
+Historical PacBio/MotifMaker GFFs can annotate more than one modified base inside the same recognition motif. A motif label alone therefore does **not** prove that the called base is the cognate methyltransferase target.
+
+When a GFF contains a `context` attribute, MOMENTO locates the called base at the centre of that context, determines its 1-based position within the motif, and infers the cognate modified position for each motif/modification combination. If multiple positions are observed, MOMENTO only selects one when the `identificationQv` evidence clearly separates it from the alternatives; otherwise it leaves the position unresolved rather than guessing.
+
+All site assignments remain in `--sites-output`, including excluded calls. The site table records `motif_position`, `cognate_position`, `identification_qv` and explicit pass/fail flags so the filtering decision is auditable.
+
+### Optional identification-QV filtering
+
+There is deliberately **no universal default** for `identificationQv`, because historical PacBio pipelines and reprocessing conventions differ. A threshold can be supplied explicitly:
+
+```bash
+momento import-pacbio \
+  --gff RM1245motifs.gff \
+  --fasta CjRM1245.fasta \
+  --sample RM1245 \
+  --min-identification-qv 80 \
+  --output RM1245.momento.tsv \
+  --sites-output RM1245.sites.tsv
+```
+
+`80` is a development/validation setting for the RM1245 example, **not** a recommended universal PacBio threshold. Use `--keep-all-motif-positions` to disable cognate-position filtering for diagnostics or legacy comparisons.
 
 ## CLI roadmap
 
@@ -88,11 +112,21 @@ momento associate       # planned
 momento report          # planned
 ```
 
-The MVP now implements validation, PacBio GFF import, genomic motif-opportunity counting, matrix generation, basic core-motif QC, prevalence summaries, PCA and Jaccard utilities.
+The MVP now implements validation, context-aware PacBio GFF import, genomic target-opportunity counting, matrix generation, basic core-motif QC, prevalence summaries, PCA and Jaccard utilities.
 
 ## v0.1 acceptance test
 
-The first real-data validation target is to reproduce the published methylome summaries for the *Campylobacter jejuni* HS:19 strains **RM1245** and **RM1477** directly from primary PacBio methylation GFFs plus assembly FASTAs. This provides an external ground truth for motif opportunity counting and methylated fractions before scaling to the full cohort.
+The first real-data validation target is the published methylome of the *Campylobacter jejuni* HS:19 strains **RM1245** and **RM1477**, using primary PacBio methylation GFFs plus assembly FASTAs.
+
+For RM1245, the published methylated/total counts include:
+
+```text
+RAATTY             26,952 / 27,594
+CATG                6,207 /  6,266
+AGTNNNNNNRTTG         310 /    316
+```
+
+Historical GFFs may not be byte-for-byte identical to the processed files used for a publication. The acceptance criterion is therefore **semantic reproduction**: recover the cognate modified position, confidence behaviour and approximately the published motif occupancy, and investigate rather than hide version-dependent discrepancies.
 
 ## Campylobacter teaching example
 
