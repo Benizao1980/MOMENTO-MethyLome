@@ -35,15 +35,9 @@ COLORS = {
 }
 
 COOL_CYCLE = [
-    COLORS["deep_ocean"],
-    COLORS["muted_teal"],
-    COLORS["slate_blue"],
-    COLORS["pale_aqua"],
-    COLORS["steel_blue"],
-    COLORS["seafoam"],
-    COLORS["powder_blue"],
-    COLORS["sand"],
-    COLORS["coral"],
+    COLORS["deep_ocean"], COLORS["muted_teal"], COLORS["slate_blue"],
+    COLORS["pale_aqua"], COLORS["steel_blue"], COLORS["seafoam"],
+    COLORS["powder_blue"], COLORS["sand"], COLORS["coral"],
 ]
 
 HOST_COLORS = {
@@ -65,26 +59,32 @@ MOD_COLORS = {
 }
 
 MARKERS = ["o", "s", "^", "D", "P", "v", "X", "<", ">"]
+PROVENANCE_MARKERS = {
+    "black_bear_2025": "o",
+    "doyleii_reference": "s",
+    "heikema_2021": "^",
+    "reference_panel": "D",
+    "salinas_collection": "P",
+    "unknown": "v",
+}
 
 
 def configure_matplotlib() -> None:
-    plt.rcParams.update(
-        {
-            "figure.facecolor": COLORS["white"],
-            "axes.facecolor": COLORS["white"],
-            "savefig.facecolor": COLORS["white"],
-            "text.color": COLORS["charcoal"],
-            "axes.labelcolor": COLORS["charcoal"],
-            "axes.edgecolor": COLORS["charcoal"],
-            "xtick.color": COLORS["charcoal"],
-            "ytick.color": COLORS["charcoal"],
-            "font.size": 9,
-            "axes.titleweight": "normal",
-            "axes.linewidth": 0.7,
-            "pdf.fonttype": 42,
-            "ps.fonttype": 42,
-        }
-    )
+    plt.rcParams.update({
+        "figure.facecolor": COLORS["white"],
+        "axes.facecolor": COLORS["white"],
+        "savefig.facecolor": COLORS["white"],
+        "text.color": COLORS["charcoal"],
+        "axes.labelcolor": COLORS["charcoal"],
+        "axes.edgecolor": COLORS["charcoal"],
+        "xtick.color": COLORS["charcoal"],
+        "ytick.color": COLORS["charcoal"],
+        "font.size": 9,
+        "axes.titleweight": "normal",
+        "axes.linewidth": 0.7,
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+    })
 
 
 def read_tsv(path: Path, *, index_col=None) -> pd.DataFrame:
@@ -141,15 +141,53 @@ def load_inputs(methylotype_dir: Path, metadata_path: Path):
     metadata = metadata.set_index("sample_id")
     missing = sorted(set(presence.index.astype(str)) - set(metadata.index.astype(str)))
     if missing:
-        raise ValueError(
-            "metadata is missing methylotype samples: " + ", ".join(missing)
-        )
+        raise ValueError("metadata is missing methylotype samples: " + ", ".join(missing))
     metadata = metadata.reindex(presence.index)
     return presence, pcoa, variance, linkage, prevalence, metadata
 
 
 def feature_modification(feature: str) -> str:
     return feature.split("|", 1)[0] if "|" in feature else "unknown"
+
+
+def feature_motif(feature: str) -> str:
+    return feature.split("|", 1)[1] if "|" in feature else feature
+
+
+def pretty_feature_label(feature: str) -> str:
+    return f"{feature_motif(feature)} [{feature_modification(feature)}]"
+
+
+def _annotation_legends(ax: plt.Axes, ann_maps: dict[str, dict[str, str]]) -> None:
+    """Place compact semantic legends in a dedicated side panel."""
+    ax.axis("off")
+
+    mod_handles = [
+        Patch(facecolor=MOD_COLORS["m6A"], edgecolor="none", label="m6A presence"),
+        Patch(facecolor=MOD_COLORS["m4C"], edgecolor="none", label="m4C presence"),
+        Patch(facecolor=COLORS["white"], edgecolor=COLORS["charcoal"], linewidth=0.5, label="absence"),
+    ]
+    legend = ax.legend(
+        handles=mod_handles, title="motif state", frameon=False,
+        loc="upper left", bbox_to_anchor=(0.0, 1.0), fontsize=7.5,
+        title_fontsize=7.5, borderaxespad=0,
+    )
+    ax.add_artist(legend)
+
+    y = 0.72
+    shown = 0
+    for column, cmap in ann_maps.items():
+        if len(cmap) > 10 or shown >= 2:
+            continue
+        handles = [Patch(facecolor=color, edgecolor="none", label=category) for category, color in cmap.items()]
+        legend = ax.legend(
+            handles=handles, title=column, frameon=False,
+            loc="upper left", bbox_to_anchor=(0.0, y), fontsize=7,
+            title_fontsize=7, borderaxespad=0,
+        )
+        ax.add_artist(legend)
+        y -= 0.30 if len(handles) <= 5 else 0.36
+        shown += 1
 
 
 def plot_heatmap(
@@ -159,44 +197,54 @@ def plot_heatmap(
     annotations: tuple[str, ...],
     outdir: Path,
     formats: tuple[str, ...],
-) -> list[str]:
-    z = linkage_df[["left", "right", "distance", "n_members"]].to_numpy(dtype=float)
+    *,
+    min_prevalence: int,
+    stem: str,
+    title: str,
+    show_feature_labels: bool,
+) -> tuple[list[str], list[str]]:
+    """Plot a clustered accessory matrix.
 
-    n_samples, n_features = presence.shape
-    fig_width = max(16.0, n_features * 0.16 + 6.0)
-    fig_height = max(9.0, n_samples * 0.18 + 2.0)
+    The dendrogram always reflects the full Jaccard/accessory analysis. The
+    displayed feature set can be prevalence-filtered for readability without
+    changing sample clustering.
+    """
+    z = linkage_df[["left", "right", "distance", "n_members"]].to_numpy(dtype=float)
+    n_samples = presence.shape[0]
+    prevalence = presence.sum(axis=0)
+    ordered_features = sorted(
+        [str(feature) for feature in presence.columns if int(prevalence[feature]) >= min_prevalence],
+        key=lambda x: (-int(prevalence[x]), feature_modification(x), feature_motif(x)),
+    )
+    if not ordered_features:
+        raise ValueError(f"No accessory features occur in >= {min_prevalence} isolates")
+
+    n_features = len(ordered_features)
+    fig_width = max(14.0, n_features * 0.22 + 8.0)
+    fig_height = max(8.2, n_samples * 0.17 + 1.7)
     fig = plt.figure(figsize=(fig_width, fig_height), facecolor=COLORS["white"])
 
     valid_annotations = tuple(x for x in annotations if x in metadata.columns)
-    ann_width = max(0.65, 0.35 * max(1, len(valid_annotations)))
+    ann_width = max(0.55, 0.27 * max(1, len(valid_annotations)))
+    heat_width = max(7.0, n_features * 0.22)
     gs = fig.add_gridspec(
-        1,
-        4,
-        width_ratios=[2.3, ann_width, max(9.0, n_features * 0.16), 1.5],
-        wspace=0.03,
+        1, 5,
+        width_ratios=[1.9, ann_width, heat_width, 1.15, 2.2],
+        wspace=0.035,
     )
     ax_den = fig.add_subplot(gs[0, 0])
     ax_ann = fig.add_subplot(gs[0, 1])
     ax_heat = fig.add_subplot(gs[0, 2])
     ax_count = fig.add_subplot(gs[0, 3])
+    ax_leg = fig.add_subplot(gs[0, 4])
 
     dd = dendrogram(
-        z,
-        orientation="left",
-        no_labels=True,
-        color_threshold=0,
+        z, orientation="left", no_labels=True, color_threshold=0,
         above_threshold_color=COLORS["slate_blue"],
-        link_color_func=lambda _k: COLORS["slate_blue"],
-        ax=ax_den,
+        link_color_func=lambda _k: COLORS["slate_blue"], ax=ax_den,
     )
     row_order = list(dd["leaves"])
     ordered_samples = presence.index[row_order]
-
-    prevalence = presence.sum(axis=0)
-    ordered_features = sorted(
-        presence.columns,
-        key=lambda x: (-int(prevalence[x]), feature_modification(str(x)), str(x)),
-    )
     ordered = presence.loc[ordered_samples, ordered_features]
     y_max = n_samples * 10
 
@@ -216,15 +264,13 @@ def plot_heatmap(
             for i, value in enumerate(ann_meta[column]):
                 ann_rgb[i, j, :] = to_rgb(cmap[normalise_category(value)])
         ax_ann.imshow(
-            ann_rgb,
-            aspect="auto",
-            interpolation="nearest",
-            origin="lower",
+            ann_rgb, aspect="auto", interpolation="nearest", origin="lower",
             extent=[0, len(valid_annotations), 0, y_max],
         )
         ax_ann.set_xticks(np.arange(len(valid_annotations)) + 0.5)
         ax_ann.set_xticklabels(valid_annotations, rotation=90, fontsize=7)
         ax_ann.set_yticks([])
+        ax_ann.tick_params(length=0)
         for spine in ax_ann.spines.values():
             spine.set_visible(False)
     else:
@@ -233,75 +279,55 @@ def plot_heatmap(
 
     rgb = np.ones((n_samples, n_features, 3), dtype=float)
     for j, feature in enumerate(ordered_features):
-        mod = feature_modification(str(feature))
+        mod = feature_modification(feature)
         present_color = to_rgb(MOD_COLORS.get(mod, COLORS["deep_ocean"]))
         hits = ordered.iloc[:, j].to_numpy(dtype=bool)
         rgb[hits, j, :] = present_color
 
     ax_heat.imshow(
-        rgb,
-        aspect="auto",
-        interpolation="nearest",
-        origin="lower",
+        rgb, aspect="auto", interpolation="nearest", origin="lower",
         extent=[0, n_features, 0, y_max],
     )
-    ax_heat.set_xticks(np.arange(n_features) + 0.5)
-    ax_heat.set_xticklabels(ordered_features, rotation=90, fontsize=5.5)
+    if show_feature_labels:
+        ax_heat.set_xticks(np.arange(n_features) + 0.5)
+        ax_heat.set_xticklabels(
+            [pretty_feature_label(x) for x in ordered_features],
+            rotation=90, fontsize=6.5,
+        )
+        ax_heat.set_xlabel("Accessory motif family")
+    else:
+        ax_heat.set_xticks([])
+        ax_heat.set_xlabel(f"{n_features} accessory motif families")
     ax_heat.set_yticks(np.arange(n_samples) * 10 + 5)
     ax_heat.set_yticklabels(ordered_samples, fontsize=6.5)
     ax_heat.set_ylabel("Isolate")
-    ax_heat.set_xlabel("Accessory motif family")
-    ax_heat.set_title("Accessory methylome repertoire", fontsize=13, pad=12)
+    ax_heat.set_title(title, fontsize=13, pad=10)
     ax_heat.tick_params(length=0)
     for spine in ax_heat.spines.values():
         spine.set_linewidth(0.5)
 
-    counts = ordered.sum(axis=1).to_numpy(dtype=float)
+    counts = presence.loc[ordered_samples].sum(axis=1).to_numpy(dtype=float)
     y_centres = np.arange(n_samples) * 10 + 5
-    ax_count.barh(y_centres, counts, height=7.0, color=COLORS["muted_teal"], edgecolor="none")
+    ax_count.barh(
+        y_centres, counts, height=7.0,
+        color=COLORS["muted_teal"], edgecolor="none",
+    )
     ax_count.set_ylim(0, y_max)
     ax_count.set_yticks([])
-    ax_count.set_xlabel("n accessory\nfeatures", fontsize=7)
+    ax_count.set_xlabel("all accessory\nfeatures", fontsize=7)
     ax_count.spines["top"].set_visible(False)
     ax_count.spines["right"].set_visible(False)
     ax_count.spines["left"].set_visible(False)
 
-    legend_items = [
-        Patch(facecolor=MOD_COLORS["m6A"], edgecolor="none", label="m6A presence"),
-        Patch(facecolor=MOD_COLORS["m4C"], edgecolor="none", label="m4C presence"),
-        Patch(facecolor=COLORS["white"], edgecolor=COLORS["charcoal"], linewidth=0.5, label="absence"),
-    ]
-    fig.legend(
-        handles=legend_items,
-        loc="lower center",
-        ncol=3,
-        frameon=False,
-        bbox_to_anchor=(0.57, -0.01),
+    _annotation_legends(ax_leg, ann_maps)
+
+    fig.subplots_adjust(
+        bottom=0.27 if show_feature_labels else 0.08,
+        top=0.95, left=0.02, right=0.99,
     )
-
-    # Small metadata legends are useful; large category sets are left as strips
-    # only so the figure does not become dominated by legend furniture.
-    legend_y = -0.055
-    for column, cmap in ann_maps.items():
-        if len(cmap) > 10:
-            continue
-        handles = [Patch(facecolor=color, edgecolor="none", label=category) for category, color in cmap.items()]
-        fig.legend(
-            handles=handles,
-            title=column,
-            loc="lower center",
-            ncol=min(5, len(handles)),
-            frameon=False,
-            bbox_to_anchor=(0.57, legend_y),
-            fontsize=7,
-            title_fontsize=7,
-        )
-        legend_y -= 0.055
-
-    fig.subplots_adjust(bottom=max(0.14, -legend_y + 0.04))
-    save_figure(fig, outdir / "figure_accessory_heatmap", formats)
+    save_figure(fig, outdir / stem, formats)
     plt.close(fig)
-    return [str(x) for x in ordered_samples]
+    return [str(x) for x in ordered_samples], ordered_features
 
 
 def pcoa_variance_fraction(variance: pd.DataFrame, axis: str) -> float:
@@ -331,11 +357,17 @@ def plot_pcoa(
     samples = pcoa.index.intersection(metadata.index)
     data = pcoa.loc[samples]
     meta = metadata.loc[samples]
-
     color_map = category_color_map(color_by, meta[color_by])
+
     if shape_by:
         shape_categories = sorted({normalise_category(x) for x in meta[shape_by]})
-        shape_map = {category: MARKERS[i % len(MARKERS)] for i, category in enumerate(shape_categories)}
+        if shape_by == "provenance_class":
+            shape_map = {
+                category: PROVENANCE_MARKERS.get(category, MARKERS[i % len(MARKERS)])
+                for i, category in enumerate(shape_categories)
+            }
+        else:
+            shape_map = {category: MARKERS[i % len(MARKERS)] for i, category in enumerate(shape_categories)}
     else:
         shape_map = {"all": "o"}
 
@@ -344,71 +376,58 @@ def plot_pcoa(
         color_cat = normalise_category(meta.loc[sample, color_by])
         shape_cat = normalise_category(meta.loc[sample, shape_by]) if shape_by else "all"
         ax.scatter(
-            float(data.loc[sample, "PCoA1"]),
-            float(data.loc[sample, "PCoA2"]),
-            s=62,
-            c=[color_map[color_cat]],
-            marker=shape_map[shape_cat],
-            edgecolors=COLORS["charcoal"],
-            linewidths=0.55,
-            alpha=0.95,
-            zorder=3,
+            float(data.loc[sample, "PCoA1"]), float(data.loc[sample, "PCoA2"]),
+            s=60, c=[color_map[color_cat]], marker=shape_map[shape_cat],
+            edgecolors=COLORS["charcoal"], linewidths=0.55, alpha=0.95, zorder=3,
         )
         if label_points:
             ax.annotate(
                 str(sample),
                 (float(data.loc[sample, "PCoA1"]), float(data.loc[sample, "PCoA2"])),
-                xytext=(3, 3),
-                textcoords="offset points",
-                fontsize=6,
+                xytext=(3, 3), textcoords="offset points", fontsize=6,
                 color=COLORS["charcoal"],
             )
 
     v1 = pcoa_variance_fraction(variance, "PCoA1")
     v2 = pcoa_variance_fraction(variance, "PCoA2")
-    label1 = f"PCoA1 ({v1:.1%})" if np.isfinite(v1) else "PCoA1"
-    label2 = f"PCoA2 ({v2:.1%})" if np.isfinite(v2) else "PCoA2"
-    ax.set_xlabel(label1)
-    ax.set_ylabel(label2)
+    ax.set_xlabel(f"PCoA1 ({v1:.1%})" if np.isfinite(v1) else "PCoA1")
+    ax.set_ylabel(f"PCoA2 ({v2:.1%})" if np.isfinite(v2) else "PCoA2")
     ax.set_title("Accessory methylome PCoA", fontsize=13)
     ax.axhline(0, color=COLORS["light_grey"], lw=0.6, zorder=0)
     ax.axvline(0, color=COLORS["light_grey"], lw=0.6, zorder=0)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+    ax.margins(x=0.06, y=0.08)
 
     color_handles = [
-        Line2D([0], [0], marker="o", linestyle="", markersize=7,
-               markerfacecolor=color, markeredgecolor=COLORS["charcoal"],
-               markeredgewidth=0.5, label=category)
+        Line2D(
+            [0], [0], marker="o", linestyle="", markersize=7,
+            markerfacecolor=color, markeredgecolor=COLORS["charcoal"],
+            markeredgewidth=0.5, label=category,
+        )
         for category, color in color_map.items()
     ]
     color_legend = ax.legend(
-        handles=color_handles,
-        title=color_by,
-        frameon=False,
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1.0),
-        fontsize=8,
-        title_fontsize=8,
+        handles=color_handles, title=color_by, frameon=False,
+        loc="upper left", bbox_to_anchor=(1.02, 1.0),
+        fontsize=8, title_fontsize=8,
     )
     ax.add_artist(color_legend)
 
     if shape_by:
         shape_handles = [
-            Line2D([0], [0], marker=marker, linestyle="", markersize=7,
-                   markerfacecolor=COLORS["white"], markeredgecolor=COLORS["charcoal"],
-                   label=category)
+            Line2D(
+                [0], [0], marker=marker, linestyle="", markersize=7,
+                markerfacecolor=COLORS["white"], markeredgecolor=COLORS["charcoal"],
+                label=category,
+            )
             for category, marker in shape_map.items()
         ]
         if len(shape_handles) <= 12:
             ax.legend(
-                handles=shape_handles,
-                title=shape_by,
-                frameon=False,
-                loc="lower left",
-                bbox_to_anchor=(1.02, 0.0),
-                fontsize=8,
-                title_fontsize=8,
+                handles=shape_handles, title=shape_by, frameon=False,
+                loc="lower left", bbox_to_anchor=(1.02, 0.0),
+                fontsize=8, title_fontsize=8,
             )
 
     save_figure(fig, outdir / "figure_pcoa", formats)
@@ -422,27 +441,49 @@ def plot_prevalence(
     formats: tuple[str, ...],
 ) -> None:
     work = prevalence.loc[prevalence["motif_family"].astype(str) != "RAATTY"].copy()
-    work = work.sort_values(["isolates", "modification", "motif_family"], ascending=[False, True, True]).head(top_n)
-    work = work.iloc[::-1]
+    work = (
+        work.sort_values(
+            ["isolates", "modification", "motif_family"],
+            ascending=[False, True, True],
+        )
+        .head(top_n)
+        .iloc[::-1]
+    )
 
     fig_height = max(5.5, 0.30 * len(work) + 1.5)
     fig, ax = plt.subplots(figsize=(8.5, fig_height), facecolor=COLORS["white"])
     bar_colors = [MOD_COLORS.get(str(x), COLORS["deep_ocean"]) for x in work["modification"]]
-    labels = [f"{motif}  [{mod}]" for motif, mod in zip(work["motif_family"], work["modification"])]
-    ax.barh(np.arange(len(work)), work["isolates"].to_numpy(), color=bar_colors, edgecolor="none")
+    labels = [
+        f"{motif}  [{mod}]"
+        for motif, mod in zip(work["motif_family"], work["modification"])
+    ]
+    bars = ax.barh(
+        np.arange(len(work)), work["isolates"].to_numpy(),
+        color=bar_colors, edgecolor="none",
+    )
     ax.set_yticks(np.arange(len(work)))
     ax.set_yticklabels(labels, fontsize=8)
     ax.set_xlabel("Number of PASS isolates")
     ax.set_title(f"Top {len(work)} accessory motif families", fontsize=13)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+
+    max_n = max(1, int(work["isolates"].max()))
+    ax.set_xlim(0, max_n + 1.0)
+    for bar, value in zip(bars, work["isolates"].to_numpy()):
+        ax.text(
+            float(value) + 0.10,
+            bar.get_y() + bar.get_height() / 2,
+            str(int(value)), va="center", ha="left", fontsize=7.5,
+            color=COLORS["charcoal"],
+        )
+
     ax.legend(
         handles=[
             Patch(facecolor=MOD_COLORS["m6A"], label="m6A"),
             Patch(facecolor=MOD_COLORS["m4C"], label="m4C"),
         ],
-        frameon=False,
-        loc="lower right",
+        frameon=False, loc="lower right",
     )
     save_figure(fig, outdir / "figure_accessory_prevalence", formats)
     plt.close(fig)
@@ -461,18 +502,36 @@ def plot_raatty_backbone(
     ].copy()
     if work.empty:
         return
-    work["methylated_fraction"] = pd.to_numeric(work["methylated_fraction"], errors="coerce")
-    work = work.sort_values(["methylated_fraction", "sample_id"])
 
+    work["methylated_fraction"] = pd.to_numeric(work["methylated_fraction"], errors="coerce")
+    work = work.dropna(subset=["methylated_fraction"]).sort_values(
+        ["methylated_fraction", "sample_id"]
+    )
+
+    minimum = float(work["methylated_fraction"].min())
+    xmin = min(0.94, minimum - 0.006)
     fig_height = max(7.0, 0.16 * len(work) + 1.2)
     fig, ax = plt.subplots(figsize=(7.2, fig_height), facecolor=COLORS["white"])
     y = np.arange(len(work))
-    ax.hlines(y, 0.9, work["methylated_fraction"], color=COLORS["powder_blue"], lw=1.0)
-    ax.scatter(work["methylated_fraction"], y, s=30, color=COLORS["deep_ocean"], edgecolors=COLORS["charcoal"], linewidths=0.4)
+    values = work["methylated_fraction"].to_numpy(dtype=float)
+    ax.hlines(y, xmin, values, color=COLORS["powder_blue"], lw=1.0)
+    ax.scatter(
+        values, y, s=30, color=COLORS["deep_ocean"],
+        edgecolors=COLORS["charcoal"], linewidths=0.4, zorder=3,
+    )
+    ax.axvline(
+        0.99, color=COLORS["light_grey"], lw=0.8,
+        linestyle="--", zorder=0,
+    )
+    ax.text(
+        0.99, -1.2, "99%", ha="center", va="bottom", fontsize=7,
+        color=COLORS["slate_blue"],
+    )
     ax.set_yticks(y)
     ax.set_yticklabels(work["sample_id"], fontsize=6.5)
-    ax.set_xlim(min(0.9, float(work["methylated_fraction"].min()) - 0.01), 1.005)
-    ax.set_xlabel("RAATTY m6A called targets / genomic targets")
+    ax.invert_yaxis()
+    ax.set_xlim(xmin, 1.0015)
+    ax.set_xlabel("RAATTY m6A occupancy (called / genomic targets)")
     ax.set_title("Conserved RAATTY methylation backbone", fontsize=13)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -481,21 +540,54 @@ def plot_raatty_backbone(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Plot MOMENTO methylotype outputs using the Life Aquatic figure style")
-    parser.add_argument("--methylotype-dir", required=True, type=Path, help="directory produced by momento methylotypes")
-    parser.add_argument("--metadata", required=True, type=Path, help="TSV with one row per sample and sample_id column")
-    parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--cohort-summary", type=Path, help="optional cohort.momento.tsv for the RAATTY backbone panel")
+    parser = argparse.ArgumentParser(
+        description="Plot MOMENTO methylotype outputs using the Life Aquatic figure style"
+    )
     parser.add_argument(
-        "--annotations",
-        default="host_group,provenance_class,species,clonal_complex",
+        "--methylotype-dir", required=True, type=Path,
+        help="directory produced by momento methylotypes",
+    )
+    parser.add_argument(
+        "--metadata", required=True, type=Path,
+        help="TSV with one row per sample and sample_id column",
+    )
+    parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument(
+        "--cohort-summary", type=Path,
+        help="optional cohort.momento.tsv for the RAATTY backbone panel",
+    )
+    parser.add_argument(
+        "--annotations", default="host_group,provenance_class",
         help="comma-separated metadata columns shown beside the heatmap",
     )
-    parser.add_argument("--color-by", default="host_group", help="metadata column used for PCoA point colour")
-    parser.add_argument("--shape-by", default="provenance_class", help="metadata column used for PCoA marker shape; pass empty string to disable")
-    parser.add_argument("--label-points", action="store_true", help="label every PCoA point (usually best only for diagnostics)")
+    parser.add_argument(
+        "--heatmap-min-prevalence", type=int, default=2,
+        help=(
+            "minimum number of isolates carrying a feature for the publication "
+            "heatmap (default: 2)"
+        ),
+    )
+    parser.add_argument(
+        "--skip-full-heatmap", action="store_true",
+        help="do not write the supplementary all-feature heatmap",
+    )
+    parser.add_argument(
+        "--color-by", default="host_group",
+        help="metadata column used for PCoA point colour",
+    )
+    parser.add_argument(
+        "--shape-by", default="provenance_class",
+        help="metadata column used for PCoA marker shape; pass empty string to disable",
+    )
+    parser.add_argument(
+        "--label-points", action="store_true",
+        help="label every PCoA point (usually best only for diagnostics)",
+    )
     parser.add_argument("--top-prevalence", type=int, default=20)
-    parser.add_argument("--formats", default="png,pdf,svg", help="comma-separated output formats")
+    parser.add_argument(
+        "--formats", default="png,pdf,svg",
+        help="comma-separated output formats",
+    )
     return parser
 
 
@@ -508,39 +600,58 @@ def main() -> None:
     shape_by = args.shape_by.strip() if args.shape_by else None
 
     presence, pcoa, variance, linkage, prevalence, metadata = load_inputs(
-        args.methylotype_dir,
-        args.metadata,
+        args.methylotype_dir, args.metadata,
     )
 
-    ordered_samples = plot_heatmap(
-        presence,
-        linkage,
-        metadata,
-        annotations,
-        args.output_dir,
-        formats,
+    main_samples, main_features = plot_heatmap(
+        presence, linkage, metadata, annotations, args.output_dir, formats,
+        min_prevalence=args.heatmap_min_prevalence,
+        stem="figure_accessory_heatmap",
+        title=(
+            "Accessory methylome repertoire "
+            f"(features in ≥{args.heatmap_min_prevalence} isolates)"
+        ),
+        show_feature_labels=True,
     )
+
+    pd.DataFrame({"sample_id": main_samples}).to_csv(
+        args.output_dir / "heatmap_sample_order.tsv", sep="\t", index=False,
+    )
+    pd.DataFrame({
+        "feature": main_features,
+        "prevalence": [int(presence[x].sum()) for x in main_features],
+    }).to_csv(
+        args.output_dir / "heatmap_feature_order.tsv", sep="\t", index=False,
+    )
+
+    if not args.skip_full_heatmap:
+        _, full_features = plot_heatmap(
+            presence, linkage, metadata, annotations, args.output_dir, formats,
+            min_prevalence=1,
+            stem="figure_accessory_heatmap_all_features",
+            title="Accessory methylome repertoire — all features",
+            show_feature_labels=False,
+        )
+        pd.DataFrame({
+            "feature": full_features,
+            "prevalence": [int(presence[x].sum()) for x in full_features],
+        }).to_csv(
+            args.output_dir / "heatmap_all_feature_order.tsv", sep="\t", index=False,
+        )
+
     plot_pcoa(
-        pcoa,
-        variance,
-        metadata,
-        args.color_by,
-        shape_by,
-        args.label_points,
-        args.output_dir,
-        formats,
+        pcoa, variance, metadata, args.color_by, shape_by,
+        args.label_points, args.output_dir, formats,
     )
     plot_prevalence(prevalence, args.top_prevalence, args.output_dir, formats)
     if args.cohort_summary:
         plot_raatty_backbone(args.cohort_summary, args.output_dir, formats)
 
-    pd.DataFrame({"sample_id": ordered_samples}).to_csv(
-        args.output_dir / "heatmap_sample_order.tsv",
-        sep="\t",
-        index=False,
-    )
     print(
-        f"FIGURES: {presence.shape[0]} samples; {presence.shape[1]} accessory features -> {args.output_dir}"
+        "FIGURES: "
+        f"{presence.shape[0]} samples; {presence.shape[1]} accessory features; "
+        f"{len(main_features)} shown in main heatmap "
+        f"(prevalence >= {args.heatmap_min_prevalence}) -> {args.output_dir}"
     )
 
 
