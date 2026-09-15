@@ -43,6 +43,24 @@ def test_context_preflight_rejects_wrong_assembly(tmp_path):
     assert result["context_concordance"] == 0.0
 
 
+def test_context_preflight_preserves_unknown_assembly_symbols(tmp_path):
+    sequence = "A" * 20 + "?" + "C" * 20
+    expected_reverse_context = "G" * 20 + "?" + "T" * 20
+    fasta = tmp_path / "genome.fasta"
+    fasta.write_text(f">chr\n{sequence}\n")
+    gff = tmp_path / "calls.gff"
+    gff.write_text(
+        "##gff-version 3\n"
+        f"chr\tkinModCall\tm6A\t21\t21\t100\t-\t.\t"
+        f"motif=RAATTY;context={expected_reverse_context};identificationQv=100\n"
+    )
+
+    result = context_preflight(gff, fasta)
+    assert result["preflight_status"] == "PASS"
+    assert result["context_compared"] == 1
+    assert result["context_exact"] == 1
+
+
 def test_context_preflight_rejects_duplicate_fasta_ids(tmp_path):
     fasta = tmp_path / "genome.fasta"
     fasta.write_text(">chr\nAAAA\n>chr\nTTTT\n")
