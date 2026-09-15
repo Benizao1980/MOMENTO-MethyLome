@@ -139,11 +139,12 @@ def cmd_methylotypes(a):
     presence = result["presence"]
     nested = result["nested"]
     variance = result["variance"]
-    raw_count = (
-        df.loc[df["qc_status"].isin(_csv_values(a.qc_statuses)), ["motif", "modification"]]
-        .drop_duplicates()
-        .shape[0]
-    )
+    raw_features = set()
+    for row in family_long.itertuples():
+        for motif in str(row.raw_motifs).split(";"):
+            if motif:
+                raw_features.add((row.modification, motif))
+    raw_count = len(raw_features)
     family_count = family_long[["motif_family", "modification"]].drop_duplicates().shape[0]
     print(
         f"METHYLOTYPES: {presence.shape[0]} samples; {raw_count} raw motif/modification features; "
