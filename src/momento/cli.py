@@ -8,6 +8,7 @@ from .matrix import build_matrix
 from .cluster import pca
 from .cohort import assess_import_status, build_cohort
 from .io.pacbio import import_pacbio_gff
+from .methylotype import run_methylotype_analysis
 
 
 def read_table(path):
@@ -114,6 +115,47 @@ def cmd_qc(a):
 def cmd_cluster(a):
     mat = pd.read_csv(a.matrix, sep="\t", index_col=0)
     pca(mat).to_csv(a.output, sep="\t")
+
+
+def _csv_values(text):
+    return tuple(x.strip() for x in text.split(",") if x.strip())
+
+
+def cmd_methylotypes(a):
+    df = read_table(a.input)
+    try:
+        result = run_methylotype_analysis(
+            df,
+            a.output_dir,
+            qc_statuses=_csv_values(a.qc_statuses),
+            modifications=_csv_values(a.modifications),
+            exclude_families=_csv_values(a.exclude_families),
+            min_called_sites=a.min_called_sites,
+        )
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"FAIL: methylotypes: {exc}") from exc
+
+    family_long = result["family_long"]
+    presence = result["presence"]
+    nested = result["nested"]
+    variance = result["variance"]
+    raw_count = (
+        df.loc[df["qc_status"].isin(_csv_values(a.qc_statuses)), ["motif", "modification"]]
+        .drop_duplicates()
+        .shape[0]
+    )
+    family_count = family_long[["motif_family", "modification"]].drop_duplicates().shape[0]
+    print(
+        f"METHYLOTYPES: {presence.shape[0]} samples; {raw_count} raw motif/modification features; "
+        f"{family_count} reverse-complement families; {presence.shape[1]} accessory features; "
+        f"{len(nested)} nested-family relationships"
+    )
+    if len(variance):
+        axes = ", ".join(
+            f"{r.axis}={r.variance_fraction:.3f}" for r in variance.itertuples()
+        )
+        print(f"PCoA positive-eigenvalue variance fractions: {axes}")
+    print(f"Outputs: {Path(a.output_dir)}")
 
 
 def add_pacbio_import_options(parser):
@@ -237,6 +279,30 @@ def build_parser():
     c.add_argument("--matrix", required=True)
     c.add_argument("--output", required=True)
     c.set_defaults(func=cmd_cluster)
+
+    mt = sub.add_parser(
+        "methylotypes",
+        help="collapse reverse-complement motif families and run binary accessory methylotype analysis",
+    )
+    mt.add_argument("--input", required=True, help="cohort.momento.tsv")
+    mt.add_argument("--output-dir", required=True)
+    mt.add_argument(
+        "--qc-statuses",
+        default="PASS",
+        help="comma-separated sample QC labels to include (default: PASS)",
+    )
+    mt.add_argument(
+        "--modifications",
+        default="m6A,m4C",
+        help="comma-separated modification classes to include (default: m6A,m4C)",
+    )
+    mt.add_argument(
+        "--exclude-families",
+        default="RAATTY",
+        help="comma-separated motif families to exclude from accessory matrix (default: RAATTY)",
+    )
+    mt.add_argument("--min-called-sites", type=int, default=1)
+    mt.set_defaults(func=cmd_methylotypes)
     return p
 
 
