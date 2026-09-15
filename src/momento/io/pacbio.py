@@ -45,6 +45,7 @@ SITE_COLUMNS = [
     "modification", "score", "motif_attribute", "source", "feature_type",
     "attributes_raw",
 ]
+NUMERIC_TOKEN_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")
 
 
 def read_fasta(path: str | Path) -> Dict[str, str]:
@@ -118,16 +119,16 @@ def choose_attribute(
 def _strip_pacbio_motif_position(text: str) -> str:
     """Strip an old SMRT/MotifMaker numeric modified-base suffix.
 
-    Some PacBio motif GFF generations encode the motif attribute as e.g.
-    ``RAATTY,2`` rather than just ``RAATTY``.  The numeric suffix records the
-    modified-base position and is not part of the recognition sequence.  We
-    remove only purely numeric suffix fields; arbitrary comma-delimited text is
-    rejected rather than silently altered.
+    Some PacBio motif GFF generations encode one motif as e.g. ``RAATTY,2``.
+    The numeric suffix records the modified-base position and is not part of the
+    recognition sequence.  This helper intentionally handles only the single-
+    motif case; comma-separated lists of overlapping motifs are handled by
+    :func:`canonicalise_motif_values`.
     """
     fields = [field.strip() for field in text.split(",")]
     if len(fields) == 1:
         return text
-    if fields[0] and all(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", field) for field in fields[1:] if field):
+    if fields[0] and all(NUMERIC_TOKEN_RE.fullmatch(field) for field in fields[1:] if field):
         return fields[0]
     raise ValueError(f"Unsupported comma-delimited motif value: {text!r}")
 
@@ -150,11 +151,54 @@ def clean_motif_component(text: str) -> str:
 
 
 def canonicalise_motif(raw: str) -> str:
-    """Normalise a motif while preserving slash-separated paired motifs."""
+    """Normalise one motif while preserving slash-separated partner motifs."""
     parts = [part for part in raw.split("/") if part.strip()]
     if not parts:
         raise ValueError(f"Empty motif value: {raw!r}")
     return "/".join(clean_motif_component(part) for part in parts)
+
+
+def canonicalise_motif_values(raw: str) -> list[str]:
+    """Return one or more canonical motifs encoded in one PacBio GFF value.
+
+    Older PacBio/MotifMaker GFFs use commas in two different ways:
+
+    * ``RAATTY,2`` -- one motif plus numeric modified-base-position metadata;
+    * ``GCCAA,RAATTY`` -- one modification call assigned to two overlapping
+      recognised motifs.
+
+    Partner motifs containing ``/`` retain their paired representation.  For a
+    comma-separated motif list, the importer explodes the call to one assignment
+    per motif.  Numeric comma fields are ignored as metadata.  Duplicate motif
+    names are de-duplicated while preserving their input order.
+    """
+    raw = raw.strip()
+    if not raw:
+        raise ValueError("Empty motif value")
+
+    # Paired motifs can themselves contain numeric position suffixes on each
+    # component, e.g. MOTIF,0/PARTNER,12. canonicalise_motif handles this.
+    if "/" in raw:
+        return [canonicalise_motif(raw)]
+
+    fields = [field.strip() for field in raw.split(",") if field.strip()]
+    if not fields:
+        raise ValueError(f"Empty motif value: {raw!r}")
+
+    # Classic one-motif + modified-position form.
+    if len(fields) == 1 or all(NUMERIC_TOKEN_RE.fullmatch(field) for field in fields[1:]):
+        return [canonicalise_motif(raw)]
+
+    motifs: list[str] = []
+    for field in fields:
+        if NUMERIC_TOKEN_RE.fullmatch(field):
+            continue
+        motif = canonicalise_motif(field)
+        if motif not in motifs:
+            motifs.append(motif)
+    if not motifs:
+        raise ValueError(f"No motif sequence found in value: {raw!r}")
+    return motifs
 
 
 def reverse_complement_iupac(motif: str) -> str:
@@ -220,7 +264,9 @@ def import_pacbio_gff(
     """Import one PacBio methylation GFF and matching assembly.
 
     Returns ``(motif_summary, site_table)``. The site table preserves the raw GFF
-    attribute field for reproducibility and later position-level analyses.
+    attribute field for reproducibility and later position-level analyses.  If a
+    single GFF record is assigned to multiple overlapping motifs, the site table
+    contains one row per site x motif assignment.
     """
     seqs = read_fasta(fasta_path)
     grouped: Counter[tuple[str, str]] = Counter()
@@ -242,20 +288,22 @@ def import_pacbio_gff(
         motif_key = choose_attribute(attrs, motif_attribute, MOTIF_KEY_PRIORITY)
         if motif_key is None or not attrs.get(motif_key):
             continue
-        motif = canonicalise_motif(attrs[motif_key])
+        motifs = canonicalise_motif_values(attrs[motif_key])
         mod_key = choose_attribute(attrs, modification_attribute, MODIFICATION_KEY_PRIORITY)
         modification = attrs[mod_key] if mod_key and attrs.get(mod_key) else str(rec["feature_type"])
-        key = (motif, modification)
-        grouped[key] += 1
-        if score is not None and math.isfinite(score):
-            scores[key].append(float(score))
-        sites.append({
-            "sample_id": sample_id,
-            "seqid": rec["seqid"], "start": rec["start"], "end": rec["end"],
-            "strand": rec["strand"], "motif": motif, "modification": modification,
-            "score": score, "motif_attribute": motif_key, "source": rec["source"],
-            "feature_type": rec["feature_type"], "attributes_raw": rec["attributes_raw"],
-        })
+
+        for motif in motifs:
+            key = (motif, modification)
+            grouped[key] += 1
+            if score is not None and math.isfinite(score):
+                scores[key].append(float(score))
+            sites.append({
+                "sample_id": sample_id,
+                "seqid": rec["seqid"], "start": rec["start"], "end": rec["end"],
+                "strand": rec["strand"], "motif": motif, "modification": modification,
+                "score": score, "motif_attribute": motif_key, "source": rec["source"],
+                "feature_type": rec["feature_type"], "attributes_raw": rec["attributes_raw"],
+            })
 
     if feature_count == 0:
         raise ValueError(f"No feature records found in {gff_path}")
