@@ -18,7 +18,7 @@ from scipy.cluster.hierarchy import leaves_list, linkage
 from scipy.spatial.distance import squareform
 
 from .cluster import jaccard_distance
-from .io.pacbio import IUPAC_REGEX, canonicalise_motif, reverse_complement_iupac
+from .io.pacbio import canonicalise_motif, reverse_complement_iupac
 
 IUPAC_BASES = {
     "A": frozenset("A"),
@@ -141,7 +141,12 @@ def build_family_presence(
     *,
     exclude_families: Iterable[str] = ("RAATTY",),
 ) -> pd.DataFrame:
-    """Build a sample x modification|motif-family binary matrix."""
+    """Build a sample x modification|motif-family binary matrix.
+
+    Samples carrying only excluded/core families are retained as all-zero rows,
+    which is important for unbiased cohort-level distance calculations.
+    """
+    all_samples = sorted(set(family_long["sample_id"].astype(str)))
     exclude = {canonical_motif_family(x) for x in exclude_families}
     work = family_long.loc[~family_long["motif_family"].isin(exclude)].copy()
     work["feature"] = work["modification"].astype(str) + "|" + work["motif_family"].astype(str)
@@ -153,6 +158,7 @@ def build_family_presence(
         aggfunc="max",
         fill_value=0,
     )
+    matrix = matrix.reindex(all_samples, fill_value=0)
     return matrix.sort_index().sort_index(axis=1).astype(int)
 
 
