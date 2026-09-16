@@ -13,20 +13,30 @@ The Puma setup used for the validated cohort has separate Conda environments nam
 
 Each batch script activates the required environment explicitly.
 
-## Puma array rule
+## Puma scheduling rules encoded here
 
-Puma permits at most **500 tasks in a single Slurm array**. The submission wrapper encodes this as a hard guard so larger cohorts are not accidentally submitted as an unsupported array. Cohorts larger than 500 isolates must be split into multiple Prokka arrays/chunks before the downstream Panaroo dependency is submitted.
+The workflow uses the `cooperma` account and `standard` partition explicitly.
 
-The optional second argument controls the maximum number of Prokka array tasks running concurrently. It must also be between 1 and 500; the default is 12.
+Puma permits at most **500 tasks in a single Slurm array**. The submission wrapper handles this automatically. If there are more than 500 isolates, it assigns multiple isolates sequentially to each array task so the array itself remains at or below 500 tasks.
+
+Examples:
+
+- 52 genomes -> 52 tasks x 1 genome/task
+- 500 genomes -> 500 tasks x 1 genome/task
+- 2,217 genomes -> 444 tasks x 5 genomes/task
+
+The optional second argument controls the maximum number of Prokka array tasks running concurrently. It must be between 1 and 500; the default is 12.
+
+Puma Prokka jobs use the resource pattern that has worked reliably on this cluster: 4 CPUs with `--mem-per-cpu=4G`, giving 16 GB total per task. This matters: an earlier 8 GB total request caused Conda activation itself to be OOM-killed before Prokka started.
 
 ## Resources
 
-| stage | CPUs | memory | walltime |
-|---|---:|---:|---:|
-| Prokka, per isolate | 4 | 8 GB | 1 h |
-| Panaroo | 16 | 32 GB | 3 h |
-| IQ-TREE 2 | 16 | 32 GB | 6 h |
-| MOMENTO figure | 2 | 4 GB | 30 min |
+| stage | CPUs | memory request | total memory | walltime |
+|---|---:|---:|---:|---:|
+| Prokka array task | 4 | 4 GB/CPU | 16 GB | 2 h |
+| Panaroo | 16 | 2 GB/CPU | 32 GB | 3 h |
+| IQ-TREE 2 | 16 | 2 GB/CPU | 32 GB | 6 h |
+| MOMENTO figure | 2 | 2 GB/CPU | 4 GB | 30 min |
 
 ## Submit the full dependency chain
 
