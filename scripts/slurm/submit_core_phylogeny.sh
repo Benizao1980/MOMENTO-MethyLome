@@ -8,6 +8,7 @@ fi
 
 WORKDIR="$(realpath "$1")"
 MAX_CONCURRENT="${2:-12}"
+MAX_ARRAY_TASKS=500
 MOMENTO_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COHORT_DIR="$(dirname "$WORKDIR")"
 SLURM_DIR="$MOMENTO_REPO/scripts/slurm"
@@ -26,9 +27,23 @@ if [[ "$N" -lt 2 ]]; then
   exit 2
 fi
 
+# Puma permits at most 500 tasks in a single Slurm array. Keep this explicit so
+# larger cohorts are chunked deliberately rather than failing at submission.
+if (( N > MAX_ARRAY_TASKS )); then
+  echo "ERROR: Puma array limit is ${MAX_ARRAY_TASKS} tasks; found ${N} samples." >&2
+  echo "Split/chunk the Prokka array before submission." >&2
+  exit 2
+fi
+
+if ! [[ "$MAX_CONCURRENT" =~ ^[0-9]+$ ]] || (( MAX_CONCURRENT < 1 || MAX_CONCURRENT > MAX_ARRAY_TASKS )); then
+  echo "ERROR: max_concurrent_prokka must be an integer between 1 and ${MAX_ARRAY_TASKS}" >&2
+  exit 2
+fi
+
 echo "Submitting MOMENTO core-phylogeny workflow"
 echo "  workdir: $WORKDIR"
 echo "  samples: $N"
+echo "  Puma max array tasks: $MAX_ARRAY_TASKS"
 echo "  max concurrent Prokka tasks: $MAX_CONCURRENT"
 
 PROKKA_RAW=$(sbatch --parsable \
@@ -60,11 +75,11 @@ PLOT_RAW=$(sbatch --parsable \
 PLOT_JOB="${PLOT_RAW%%;*}"
 
 cat > phylogeny_slurm_jobs.tsv <<EOF
-stage	job_id	dependency
-prokka	${PROKKA_JOB}	-
-panaroo	${PANAROO_JOB}	afterok:${PROKKA_JOB}
-iqtree	${IQTREE_JOB}	afterok:${PANAROO_JOB}
-plot	${PLOT_JOB}	afterok:${IQTREE_JOB}
+stage\tjob_id\tdependency
+prokka\t${PROKKA_JOB}\t-
+panaroo\t${PANAROO_JOB}\tafterok:${PROKKA_JOB}
+iqtree\t${IQTREE_JOB}\tafterok:${PANAROO_JOB}
+plot\t${PLOT_JOB}\tafterok:${IQTREE_JOB}
 EOF
 
 echo
