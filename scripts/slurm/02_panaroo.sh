@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=momento_panaroo
+#SBATCH --account=cooperma
+#SBATCH --partition=standard
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=32G
+#SBATCH --mem-per-cpu=2G
 #SBATCH --time=03:00:00
 #SBATCH --output=slurm_logs/panaroo_%j.out
 #SBATCH --error=slurm_logs/panaroo_%j.err
