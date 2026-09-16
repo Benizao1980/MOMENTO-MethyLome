@@ -27,16 +27,19 @@ if [[ "$N" -lt 2 ]]; then
   exit 2
 fi
 
-# Puma permits at most 500 tasks in a single Slurm array. Keep this explicit so
-# larger cohorts are chunked deliberately rather than failing at submission.
-if (( N > MAX_ARRAY_TASKS )); then
-  echo "ERROR: Puma array limit is ${MAX_ARRAY_TASKS} tasks; found ${N} samples." >&2
-  echo "Split/chunk the Prokka array before submission." >&2
+if ! [[ "$MAX_CONCURRENT" =~ ^[0-9]+$ ]] || (( MAX_CONCURRENT < 1 || MAX_CONCURRENT > MAX_ARRAY_TASKS )); then
+  echo "ERROR: max_concurrent_prokka must be an integer between 1 and ${MAX_ARRAY_TASKS}" >&2
   exit 2
 fi
 
-if ! [[ "$MAX_CONCURRENT" =~ ^[0-9]+$ ]] || (( MAX_CONCURRENT < 1 || MAX_CONCURRENT > MAX_ARRAY_TASKS )); then
-  echo "ERROR: max_concurrent_prokka must be an integer between 1 and ${MAX_ARRAY_TASKS}" >&2
+# Puma permits at most 500 tasks in one Slurm array. For cohorts larger than
+# that, assign multiple samples sequentially to each task rather than creating
+# an oversized array. Example: 2,217 genomes -> 5 samples/task -> 444 tasks.
+SAMPLES_PER_TASK=$(( (N + MAX_ARRAY_TASKS - 1) / MAX_ARRAY_TASKS ))
+ARRAY_TASKS=$(( (N + SAMPLES_PER_TASK - 1) / SAMPLES_PER_TASK ))
+
+if (( ARRAY_TASKS > MAX_ARRAY_TASKS )); then
+  echo "ERROR: internal batching error: ${ARRAY_TASKS} array tasks exceeds Puma limit ${MAX_ARRAY_TASKS}" >&2
   exit 2
 fi
 
@@ -44,12 +47,14 @@ echo "Submitting MOMENTO core-phylogeny workflow"
 echo "  workdir: $WORKDIR"
 echo "  samples: $N"
 echo "  Puma max array tasks: $MAX_ARRAY_TASKS"
+echo "  samples per Prokka array task: $SAMPLES_PER_TASK"
+echo "  Prokka array tasks: $ARRAY_TASKS"
 echo "  max concurrent Prokka tasks: $MAX_CONCURRENT"
 
 PROKKA_RAW=$(sbatch --parsable \
   --chdir="$WORKDIR" \
-  --array="1-${N}%${MAX_CONCURRENT}" \
-  --export=ALL,WORKDIR="$WORKDIR" \
+  --array="1-${ARRAY_TASKS}%${MAX_CONCURRENT}" \
+  --export=ALL,WORKDIR="$WORKDIR",SAMPLES_PER_TASK="$SAMPLES_PER_TASK" \
   "$SLURM_DIR/01_prokka_array.sh")
 PROKKA_JOB="${PROKKA_RAW%%;*}"
 
@@ -75,11 +80,11 @@ PLOT_RAW=$(sbatch --parsable \
 PLOT_JOB="${PLOT_RAW%%;*}"
 
 cat > phylogeny_slurm_jobs.tsv <<EOF
-stage\tjob_id\tdependency
-prokka\t${PROKKA_JOB}\t-
-panaroo\t${PANAROO_JOB}\tafterok:${PROKKA_JOB}
-iqtree\t${IQTREE_JOB}\tafterok:${PANAROO_JOB}
-plot\t${PLOT_JOB}\tafterok:${IQTREE_JOB}
+stage\tjob_id\tdependency\tarray_tasks\tsamples_per_task
+prokka\t${PROKKA_JOB}\t-\t${ARRAY_TASKS}\t${SAMPLES_PER_TASK}
+panaroo\t${PANAROO_JOB}\tafterok:${PROKKA_JOB}\t-\t-
+iqtree\t${IQTREE_JOB}\tafterok:${PANAROO_JOB}\t-\t-
+plot\t${PLOT_JOB}\tafterok:${IQTREE_JOB}\t-\t-
 EOF
 
 echo
