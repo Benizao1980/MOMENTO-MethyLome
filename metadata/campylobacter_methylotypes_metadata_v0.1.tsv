@@ -1,0 +1,53 @@
+sample_id	qc_status	host_group	host_detail	provenance_class	species	subspecies	country	study	st	clonal_complex	serotype	notes
+RM10527	PASS	wild_bird	starling	salinas_collection	Campylobacter jejuni	jejuni	USA	Salinas USDA				
+RM10982	PASS	environment	water	salinas_collection	Campylobacter jejuni	jejuni	USA	Salinas USDA				
+RM1221	PASS	unknown	unknown	unknown	unknown	unknown	unknown	unknown				metadata to curate
+RM1245	PASS	human	clinical	heikema_2021	Campylobacter jejuni	jejuni	USA	Heikema et al. 2021	22	22	HS19	older serotyping also reported HS19,38
+RM1247	PASS	unknown	unknown	unknown	unknown	unknown	unknown	unknown				metadata to curate
+RM1248	PASS	unknown	unknown	unknown	unknown	unknown	unknown	unknown				metadata to curate
+RM12657	PASS	unknown	unknown	unknown	unknown	unknown	unknown	unknown				provenance unresolved
+RM12787	PASS	wild_bird	crow	salinas_collection	Campylobacter jejuni	jejuni	USA	Salinas USDA				
+RM13131	PASS	wild_bird	crow	salinas_collection	Campylobacter jejuni	jejuni	USA	Salinas USDA				
+RM1409	PASS	unknown	unknown	unknown	unknown	unknown	unknown	unknown				metadata to curate
+RM1449	PASS	unknown	unknown	unknown	unknown	unknown	unknown	unknown				metadata to curate
+RM1464	PASS	unknown	unknown	unknown	unknown	unknown	unknown	unknown				metadata to curate
+RM1477	PASS	human	clinical	heikema_2021	Campylobacter jejuni	jejuni	USA	Heikema et al. 2021	22	22	HS19	
+RM2227	PASS	unknown	unknown	unknown	unknown	unknown	unknown	unknown				metadata to curate
+RM3203	PASS	unknown	unknown	unknown	unknown	unknown	unknown	unknown				metadata to curate
+RM3405	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3408	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3410	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3411	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3412	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3414	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3415	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3416	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3417	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3418	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3419	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3421	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3422	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3423	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3424	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3426	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3427	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				corrected duplicate FASTA IDs used for MOMENTO import
+RM3428	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3429	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3432	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3434	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3436	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3437	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3438	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM3442	PASS	unknown	unknown	reference_panel	unknown	unknown	unknown	unknown				metadata to curate
+RM4099	PASS	human	clinical	doyleii_reference	Campylobacter jejuni	doylei	South Africa	reference strain				strain 269.97 / ATCC BAA-1458
+RM9378	PASS	wild_bird	crow	salinas_collection	Campylobacter jejuni	jejuni	USA	Salinas USDA				
+RM9516	PASS	wild_bird	crow	salinas_collection	Campylobacter jejuni	jejuni	USA	Salinas USDA				
+RM9757	PASS	wild_bird	blackbird	salinas_collection	Campylobacter jejuni	jejuni	USA	Salinas USDA				
+SKBC1	PASS	black_bear	black bear	black_bear_2025	Campylobacter jejuni	jejuni	USA	Parker et al. 2025	222	206		
+SKBC25	PASS	black_bear	black bear	black_bear_2025	Campylobacter jejuni	jejuni	USA	Parker et al. 2025	10624	179		
+SKBC3	PASS	black_bear	black bear	black_bear_2025	Campylobacter jejuni	jejuni	USA	Parker et al. 2025	7630			
+SKBC41	PASS	black_bear	black bear	black_bear_2025	Campylobacter jejuni	jejuni	USA	Parker et al. 2025	45	45		
+SKBC5	PASS	black_bear	black bear	black_bear_2025	Campylobacter jejuni	jejuni	USA	Parker et al. 2025	10620			
+SKBC57	PASS	black_bear	black bear	black_bear_2025	Campylobacter jejuni	jejuni	USA	Parker et al. 2025	21	21		
+SKBC9	PASS	black_bear	black bear	black_bear_2025	Campylobacter jejuni	jejuni	USA	Parker et al. 2025	10501			
+SKBC94	PASS	black_bear	black bear	black_bear_2025	Campylobacter jejuni	jejuni	USA	Parker et al. 2025	682	682		
