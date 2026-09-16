@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=momento_treeplot
+#SBATCH --account=cooperma
+#SBATCH --partition=standard
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=4G
+#SBATCH --mem-per-cpu=2G
 #SBATCH --time=00:30:00
 #SBATCH --output=slurm_logs/treeplot_%j.out
 #SBATCH --error=slurm_logs/treeplot_%j.err
