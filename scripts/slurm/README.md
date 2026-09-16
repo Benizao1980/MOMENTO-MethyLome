@@ -13,6 +13,12 @@ The Puma setup used for the validated cohort has separate Conda environments nam
 
 Each batch script activates the required environment explicitly.
 
+## Puma array rule
+
+Puma permits at most **500 tasks in a single Slurm array**. The submission wrapper encodes this as a hard guard so larger cohorts are not accidentally submitted as an unsupported array. Cohorts larger than 500 isolates must be split into multiple Prokka arrays/chunks before the downstream Panaroo dependency is submitted.
+
+The optional second argument controls the maximum number of Prokka array tasks running concurrently. It must also be between 1 and 500; the default is 12.
+
 ## Resources
 
 | stage | CPUs | memory | walltime |
@@ -21,8 +27,6 @@ Each batch script activates the required environment explicitly.
 | Panaroo | 16 | 32 GB | 3 h |
 | IQ-TREE 2 | 16 | 32 GB | 6 h |
 | MOMENTO figure | 2 | 4 GB | 30 min |
-
-The submission wrapper defaults to at most 12 simultaneous Prokka tasks. Pass a second argument to change that cap.
 
 ## Submit the full dependency chain
 
