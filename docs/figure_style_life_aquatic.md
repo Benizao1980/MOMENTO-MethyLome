@@ -94,6 +94,24 @@ assigned from the cool palette before adding new warm colours.
   wasting space from zero; a subtle 99% reference line may be shown as a visual
   guide, not a biological threshold.
 
+### Core-genome phylogeny + methylome tracks
+
+- Use a rectangular phylogram with thin slate-blue branches on white.
+- The tree defines isolate order; do not re-cluster methylome features and then
+  imply that order is phylogenetic.
+- Put isolate labels immediately beside the tree, followed by narrow metadata
+  strips, RAATTY occupancy, accessory motif tracks and total repertoire size.
+- Use the same host/provenance colours as the heatmap and PCoA.
+- Show only common/top accessory motif families in the manuscript-facing tree
+  to preserve legibility; the underlying repertoire counts still use all
+  accessory features.
+- A tree may contain extra tips, but they must be explicitly audited and pruned.
+  Missing MOMENTO samples are an error.
+- Treat a Panaroo/core-gene IQ-TREE as a descriptive population-genetic
+  backbone. Campylobacter is recombinogenic, so branch lengths should not be
+  over-interpreted as a strictly clonal genealogy unless a recombination-aware
+  analysis has been performed.
+
 ## Reproducibility
 
 Figure scripts should take explicit input/output paths, avoid hard-coded HPC
