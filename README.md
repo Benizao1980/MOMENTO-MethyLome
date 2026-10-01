@@ -47,7 +47,12 @@ ONT modBAM / bedMethyl ─────────────┘
                                    v                       v
                               methylotypes            associations
                           PCA / PCoA / clustering    host / phenotype
+                                   |                       ^
+                                   v                       |
+                           core-genome lineage ------------┘
 ```
+
+MOMENTO keeps the methylome and genomic-lineage layers separate until the population-analysis stage. This is important: the phylogeny should not be constructed from methylation patterns and then used to claim that methylation follows phylogeny.
 
 ## Installation
 
@@ -112,7 +117,7 @@ momento associate       # planned
 momento report          # planned
 ```
 
-The MVP now implements validation, context-aware PacBio GFF import, genomic target-opportunity counting, matrix generation, basic core-motif QC, prevalence summaries, PCA and Jaccard utilities.
+The MVP now implements validation, context-aware PacBio GFF import, genomic target-opportunity counting, matrix generation, basic core-motif QC, prevalence summaries, PCA and Jaccard utilities. The worked Campylobacter branch additionally contains core-tree handling, phylogeny-aligned visualisation and explicit population-level lineage/host analysis helpers.
 
 ## v0.1 acceptance test
 
@@ -139,7 +144,26 @@ See `examples/campylobacter/README.md`. The example uses synthetic/public-safe d
 - how to connect motifs to candidate MTases and phase-variable loci;
 - how to avoid phylogenetic leakage in phenotype prediction.
 
-For the current 57-genome Campylobacter panel, the core-genome phylogeny should be built separately from assembly FASTAs using a bacterial annotation workflow (for example Bakta or Prokka) followed by Panaroo/PIRATE and IQ-TREE. The PacBio `*motifs.gff` files are methylation-call GFFs, **not** gene-annotation GFFs and should not be supplied directly to Panaroo/PIRATE.
+## Current Campylobacter population workflow
+
+The present real-data development cohort started from a 57-isolate panel and contains **52 QC-PASS isolates** in the core-phylogeny/methylome analysis. The core tree is built separately from assembly FASTAs using consistent Prokka annotation, Panaroo core alignment and IQ-TREE 2. The PacBio `*motifs.gff` files are methylation-call GFFs, **not** gene-annotation GFFs and must not be supplied directly to Panaroo/PIRATE.
+
+The complete reproducible workflow is documented in:
+
+- `examples/campylobacter_core_phylogeny_workflow.md` — QC-clean assembly staging, Puma/Slurm execution, Prokka, Panaroo, IQ-TREE, metadata v0.2 and the revised ST/CC + methylome figure;
+- `examples/campylobacter_lineage_host_analysis.md` — accessory-methylome Jaccard distance, phylogenetic patristic distance, lineage PCoA and host/lineage variance attribution;
+- `metadata/README.md` — derivation of the canonical 52-isolate biological metadata, ecological host grouping, ST/CC conventions and missing-data rules;
+- `scripts/slurm/README.md` — Puma resource settings, the 500-task array limit, validated job behaviour and selective rerun commands.
+
+The key principle is **freeze inputs and audit transformations**. Each population result should retain the exact sample list, metadata version, distance matrices, model settings and Git commit used to generate it.
+
+### Current analysis question
+
+The descriptive figure suggests a conserved RAATTY methylation backbone alongside a sparse, heterogeneous accessory methylome. The next formal question is therefore not simply whether a few discrete methylotypes exist, but:
+
+> How much accessory methylome variation is associated with genomic lineage, and how much additional variation is associated with host ecology after lineage is represented explicitly?
+
+The initial analysis is deliberately exploratory. *Campylobacter* undergoes extensive homologous recombination, and host, lineage and collection provenance are partially confounded in this small panel. Any apparent host association therefore needs lineage/provenance sensitivity analyses and, if important, a recombination-aware tree and within-lineage confirmation.
 
 ## Data policy
 
