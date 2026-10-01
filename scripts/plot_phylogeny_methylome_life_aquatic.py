@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """Plot a core-genome phylogeny with aligned MOMENTO methylome tracks.
 
-Inputs are deliberately generic: an IQ-TREE-style Newick tree, a MOMENTO
-methylotype directory, the cohort summary and isolate metadata. Extra tree tips
-are pruned; every QC-clean methylotype sample must be present in the tree.
+The tree defines isolate order. Biological annotations are displayed alongside
+that tree but do not influence the topology or tip ordering.
+
+The v0.2 figure separates three kinds of information deliberately:
+
+* lineage labels (ST and clonal complex) are shown as text;
+* ecological/provenance variables are shown as categorical colour strips;
+* methylome measurements are shown as continuous or presence/absence tracks.
+
+This avoids assigning arbitrary colours to dozens of STs while making it easy
+to see whether accessory methylome patterns follow genomic lineage or host.
 """
 from __future__ import annotations
 
@@ -12,7 +20,6 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
-from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 import numpy as np
 import pandas as pd
@@ -35,26 +42,35 @@ COLORS = {
     "white": "#FFFFFF",
 }
 
+# Okabe-Ito-derived categorical colours for ecological host groups. These are
+# intentionally more separated than the original muted Life Aquatic palette.
+HOST_COLORS = {
+    "human": "#D55E00",
+    "wild_bird": "#0072B2",
+    "wild_mammal": "#009E73",
+    "poultry": "#E69F00",
+    "environment": "#CC79A7",
+    "unknown": COLORS["light_grey"],
+    "": COLORS["light_grey"],
+    "black_bear": "#009E73",
+    "chicken": "#E69F00",
+    "water": "#CC79A7",
+}
+
 COOL_CYCLE = [
     COLORS["deep_ocean"], COLORS["muted_teal"], COLORS["slate_blue"],
     COLORS["pale_aqua"], COLORS["steel_blue"], COLORS["seafoam"],
     COLORS["powder_blue"], COLORS["sand"], COLORS["coral"],
 ]
 
-HOST_COLORS = {
-    "human": COLORS["deep_ocean"],
-    "poultry": COLORS["muted_teal"],
-    "chicken": COLORS["muted_teal"],
-    "wild_bird": COLORS["pale_aqua"],
-    "black_bear": COLORS["slate_blue"],
-    "environment": COLORS["seafoam"],
-    "water": COLORS["seafoam"],
-    "reference": COLORS["sand"],
-    "unknown": COLORS["light_grey"],
-    "": COLORS["light_grey"],
-}
-
 MOD_COLORS = {"m6A": COLORS["deep_ocean"], "m4C": COLORS["coral"]}
+
+DISPLAY_NAMES = {
+    "host_group": "host",
+    "provenance_class": "provenance",
+    "st": "ST",
+    "clonal_complex": "CC",
+}
 
 
 def configure_matplotlib() -> None:
@@ -90,8 +106,9 @@ def category_color_map(column: str, values: pd.Series) -> dict[str, str]:
             category: HOST_COLORS.get(category.lower(), COOL_CYCLE[i % len(COOL_CYCLE)])
             for i, category in enumerate(categories)
         }
+
     mapping: dict[str, str] = {}
-    nonmissing = [x for x in categories if x.lower() not in {"unknown", "nan", "none"}]
+    nonmissing = [x for x in categories if x.lower() not in {"unknown", "nan", "none", ""}]
     for i, category in enumerate(nonmissing):
         mapping[category] = COOL_CYCLE[i % len(COOL_CYCLE)]
     for category in categories:
@@ -101,6 +118,21 @@ def category_color_map(column: str, values: pd.Series) -> dict[str, str]:
 
 def feature_modification(feature: str) -> str:
     return feature.split("|", 1)[0] if "|" in feature else "unknown"
+
+
+def format_text_annotation(column: str, value: object) -> str:
+    if pd.isna(value):
+        return "–"
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return "–"
+    if column == "st":
+        return text if text.upper().startswith("ST") else f"ST{text}"
+    if column == "clonal_complex":
+        if text.upper() == "ND":
+            return "ND"
+        return text if text.upper().startswith("CC") else f"CC{text}"
+    return text
 
 
 def save_figure(fig: plt.Figure, stem: Path, formats: tuple[str, ...]) -> None:
@@ -133,7 +165,10 @@ def load_raatty(summary_path: Path, samples: list[str]) -> pd.Series:
     work["methylated_fraction"] = pd.to_numeric(work["methylated_fraction"], errors="coerce")
     dup = work["sample_id"].astype(str).duplicated()
     if dup.any():
-        raise ValueError("Multiple RAATTY m6A summary rows for: " + ", ".join(work.loc[dup, "sample_id"].astype(str)))
+        raise ValueError(
+            "Multiple RAATTY m6A summary rows for: "
+            + ", ".join(work.loc[dup, "sample_id"].astype(str))
+        )
     return work.set_index(work["sample_id"].astype(str))["methylated_fraction"].reindex(samples)
 
 
@@ -144,7 +179,16 @@ def main() -> None:
     parser.add_argument("--metadata", required=True, type=Path)
     parser.add_argument("--cohort-summary", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--annotations", default="host_group,provenance_class")
+    parser.add_argument(
+        "--annotations",
+        default="host_group,provenance_class",
+        help="Comma-separated categorical metadata strips",
+    )
+    parser.add_argument(
+        "--text-annotations",
+        default="st,clonal_complex",
+        help="Comma-separated metadata columns rendered as aligned text",
+    )
     parser.add_argument("--min-feature-prevalence", type=int, default=2)
     parser.add_argument("--max-features", type=int, default=30, help="0 means no maximum")
     parser.add_argument("--formats", default="png,pdf,svg")
@@ -155,10 +199,12 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     formats = tuple(x.strip().lower() for x in args.formats.split(",") if x.strip())
     annotations = tuple(x.strip() for x in args.annotations.split(",") if x.strip())
+    text_annotations = tuple(x.strip() for x in args.text_annotations.split(",") if x.strip())
 
     presence = pd.read_csv(args.methylotype_dir / "accessory_presence_absence.tsv", sep="\t", index_col=0)
     presence.index = presence.index.astype(str)
-    metadata = pd.read_csv(args.metadata, sep="\t")
+
+    metadata = pd.read_csv(args.metadata, sep="\t", dtype=str, keep_default_na=True)
     if "sample_id" not in metadata.columns:
         raise SystemExit("metadata must contain sample_id")
     if metadata["sample_id"].astype(str).duplicated().any():
@@ -189,7 +235,10 @@ def main() -> None:
 
     prevalence = presence.sum(axis=0).astype(int)
     selected = [x for x in presence.columns if prevalence[x] >= args.min_feature_prevalence]
-    selected = sorted(selected, key=lambda x: (-int(prevalence[x]), feature_modification(str(x)), str(x)))
+    selected = sorted(
+        selected,
+        key=lambda x: (-int(prevalence[x]), feature_modification(str(x)), str(x)),
+    )
     if args.max_features > 0:
         selected = selected[: args.max_features]
     if not selected:
@@ -198,23 +247,38 @@ def main() -> None:
     n = len(tip_order)
     k = len(selected)
     valid_annotations = [x for x in annotations if x in metadata.columns]
-    fig_w = max(15.0, 10.5 + 0.23 * k + 0.45 * len(valid_annotations))
+    valid_text = [x for x in text_annotations if x in metadata.columns]
+
+    fig_w = max(
+        16.0,
+        10.8 + 0.23 * k + 0.62 * len(valid_text) + 0.42 * len(valid_annotations),
+    )
     fig_h = max(9.0, 0.19 * n + 1.8)
     fig = plt.figure(figsize=(fig_w, fig_h), facecolor=COLORS["white"])
     gs = fig.add_gridspec(
         1,
-        6,
-        width_ratios=[4.2, max(0.7, 0.38 * len(valid_annotations)), 1.35, max(4.5, 0.22 * k), 1.15, 2.2],
+        7,
+        width_ratios=[
+            4.2,
+            max(1.2, 0.72 * len(valid_text)),
+            max(0.7, 0.38 * len(valid_annotations)),
+            1.35,
+            max(4.5, 0.22 * k),
+            1.15,
+            2.2,
+        ],
         wspace=0.05,
     )
     ax_tree = fig.add_subplot(gs[0, 0])
-    ax_ann = fig.add_subplot(gs[0, 1])
-    ax_raatty = fig.add_subplot(gs[0, 2])
-    ax_heat = fig.add_subplot(gs[0, 3])
-    ax_count = fig.add_subplot(gs[0, 4])
-    ax_leg = fig.add_subplot(gs[0, 5])
+    ax_text = fig.add_subplot(gs[0, 1])
+    ax_ann = fig.add_subplot(gs[0, 2])
+    ax_raatty = fig.add_subplot(gs[0, 3])
+    ax_heat = fig.add_subplot(gs[0, 4])
+    ax_count = fig.add_subplot(gs[0, 5])
+    ax_leg = fig.add_subplot(gs[0, 6])
 
-    # Tree
+    # Tree. IQ-TREE is unrooted; this rectangular drawing uses its stored Newick
+    # orientation for display only. No biological rooting is inferred here.
     draw_tree(ax_tree, tree, coords)
     xmax = max(x for x, _ in coords.values())
     label_pad = max(0.02 * xmax, 0.002) if xmax > 0 else 0.15
@@ -231,7 +295,37 @@ def main() -> None:
     if xmax > 0:
         ax_tree.set_xlim(0, xmax + max(0.22 * xmax, 6 * label_pad))
 
-    # Metadata strips
+    # ST / clonal-complex labels as text. Do not colour individual STs: there
+    # are too many categories and colour would imply equivalence to host strips.
+    if valid_text:
+        for j, column in enumerate(valid_text):
+            for i, value in enumerate(metadata[column]):
+                ax_text.text(
+                    j,
+                    i,
+                    format_text_annotation(column, value),
+                    ha="center",
+                    va="center",
+                    fontsize=6.2,
+                )
+        ax_text.set_xlim(-0.5, len(valid_text) - 0.5)
+        ax_text.set_ylim(-0.7, n - 0.3)
+        ax_text.invert_yaxis()
+        ax_text.set_xticks(np.arange(len(valid_text)))
+        ax_text.set_xticklabels(
+            [DISPLAY_NAMES.get(x, x) for x in valid_text],
+            fontsize=6.5,
+            fontweight="bold",
+        )
+        ax_text.xaxis.tick_top()
+        ax_text.tick_params(axis="x", length=0, pad=4)
+        ax_text.set_yticks([])
+    else:
+        ax_text.axis("off")
+    for spine in ax_text.spines.values():
+        spine.set_visible(False)
+
+    # Ecological/provenance strips.
     ann_maps: dict[str, dict[str, str]] = {}
     if valid_annotations:
         rgb = np.zeros((n, len(valid_annotations), 3), dtype=float)
@@ -242,16 +336,27 @@ def main() -> None:
                 rgb[i, j, :] = to_rgb(cmap[normalise_category(value)])
         ax_ann.imshow(rgb, aspect="auto", interpolation="nearest", origin="upper")
         ax_ann.set_xticks(np.arange(len(valid_annotations)))
-        ax_ann.set_xticklabels(valid_annotations, rotation=90, fontsize=6.5)
+        ax_ann.set_xticklabels(
+            [DISPLAY_NAMES.get(x, x) for x in valid_annotations],
+            rotation=90,
+            fontsize=6.5,
+        )
         ax_ann.set_yticks([])
     else:
         ax_ann.axis("off")
     for spine in ax_ann.spines.values():
         spine.set_visible(False)
 
-    # RAATTY occupancy
+    # Conserved RAATTY occupancy.
     y = np.arange(n)
-    ax_raatty.scatter(raatty.to_numpy(), y, s=16, color=COLORS["deep_ocean"], edgecolors=COLORS["charcoal"], linewidths=0.3)
+    ax_raatty.scatter(
+        raatty.to_numpy(),
+        y,
+        s=16,
+        color=COLORS["deep_ocean"],
+        edgecolors=COLORS["charcoal"],
+        linewidths=0.3,
+    )
     ax_raatty.axvline(0.99, color=COLORS["powder_blue"], lw=0.7, ls="--")
     finite = raatty.dropna()
     xmin = max(0.0, min(0.94, float(finite.min()) - 0.005)) if len(finite) else 0.94
@@ -265,7 +370,7 @@ def main() -> None:
     ax_raatty.spines["top"].set_visible(False)
     ax_raatty.spines["right"].set_visible(False)
 
-    # Accessory methylome display tracks
+    # Accessory methylome display tracks.
     display = presence[selected]
     heat_rgb = np.ones((n, k, 3), dtype=float)
     for j, feature in enumerate(selected):
@@ -277,14 +382,13 @@ def main() -> None:
     ax_heat.set_xticklabels(selected, rotation=90, fontsize=5.5)
     ax_heat.set_yticks([])
     ax_heat.set_xlabel("Accessory motif family", fontsize=7)
-    ax_heat.set_title(
-        f"Accessory methylome (top/common {k} features)", fontsize=10, pad=9
-    )
+    ax_heat.set_title(f"Accessory methylome (top/common {k} features)", fontsize=10, pad=9)
     ax_heat.tick_params(length=0)
     for spine in ax_heat.spines.values():
         spine.set_linewidth(0.45)
 
-    # Total accessory repertoire size always uses all features.
+    # Total accessory repertoire size always uses all feature columns, not only
+    # the top/common features displayed in the heatmap.
     counts = presence.sum(axis=1).to_numpy(dtype=float)
     ax_count.barh(y, counts, height=0.68, color=COLORS["muted_teal"], edgecolor="none")
     ax_count.set_ylim(-0.7, n - 0.3)
@@ -296,22 +400,45 @@ def main() -> None:
     ax_count.spines["right"].set_visible(False)
     ax_count.spines["left"].set_visible(False)
 
-    # Legends
+    # Legends. Long provenance lists are intentionally omitted rather than
+    # creating an unreadable panel; their values remain in the audit TSV.
     ax_leg.axis("off")
     legend_y = 0.98
     state_handles = [
         Patch(facecolor=MOD_COLORS["m6A"], label="m6A presence"),
         Patch(facecolor=MOD_COLORS["m4C"], label="m4C presence"),
-        Patch(facecolor=COLORS["white"], edgecolor=COLORS["charcoal"], linewidth=0.5, label="absence"),
+        Patch(
+            facecolor=COLORS["white"],
+            edgecolor=COLORS["charcoal"],
+            linewidth=0.5,
+            label="absence",
+        ),
     ]
-    leg = ax_leg.legend(handles=state_handles, title="motif state", frameon=False, loc="upper left", bbox_to_anchor=(0, legend_y), fontsize=7, title_fontsize=7)
+    leg = ax_leg.legend(
+        handles=state_handles,
+        title="motif state",
+        frameon=False,
+        loc="upper left",
+        bbox_to_anchor=(0, legend_y),
+        fontsize=7,
+        title_fontsize=7,
+    )
     ax_leg.add_artist(leg)
     legend_y -= 0.22
+
     for column, cmap in ann_maps.items():
         if len(cmap) > 12:
             continue
         handles = [Patch(facecolor=color, edgecolor="none", label=cat) for cat, color in cmap.items()]
-        leg = ax_leg.legend(handles=handles, title=column, frameon=False, loc="upper left", bbox_to_anchor=(0, legend_y), fontsize=6.5, title_fontsize=7)
+        leg = ax_leg.legend(
+            handles=handles,
+            title=DISPLAY_NAMES.get(column, column),
+            frameon=False,
+            loc="upper left",
+            bbox_to_anchor=(0, legend_y),
+            fontsize=6.5,
+            title_fontsize=7,
+        )
         ax_leg.add_artist(leg)
         legend_y -= min(0.34, 0.07 + 0.038 * len(handles))
 
@@ -320,7 +447,9 @@ def main() -> None:
     plt.close(fig)
 
     # Audits for reproducibility.
-    pd.DataFrame({"sample_id": tip_order}).to_csv(args.output_dir / "phylogeny_tip_order.tsv", sep="\t", index=False)
+    pd.DataFrame({"sample_id": tip_order}).to_csv(
+        args.output_dir / "phylogeny_tip_order.tsv", sep="\t", index=False
+    )
     pd.DataFrame(
         {
             "feature": selected,
@@ -330,14 +459,46 @@ def main() -> None:
     ).to_csv(args.output_dir / "phylogeny_feature_order.tsv", sep="\t", index=False)
     pd.DataFrame(
         {
-            "category": ["methylotype_samples", "tree_tips_before_pruning", "extra_tree_tips_pruned", "tree_tips_plotted"],
+            "category": [
+                "methylotype_samples",
+                "tree_tips_before_pruning",
+                "extra_tree_tips_pruned",
+                "tree_tips_plotted",
+            ],
             "n": [len(samples), len(tree_tips), len(extra_tree), len(tip_order)],
-            "values": [";".join(sorted(samples)), ";".join(sorted(tree_tips)), ";".join(extra_tree), ";".join(tip_order)],
+            "values": [
+                ";".join(sorted(samples)),
+                ";".join(sorted(tree_tips)),
+                ";".join(extra_tree),
+                ";".join(tip_order),
+            ],
         }
     ).to_csv(args.output_dir / "phylogeny_alignment_audit.tsv", sep="\t", index=False)
 
+    audit_columns = [
+        x
+        for x in [
+            "host_group",
+            "host_detail",
+            "provenance_class",
+            "country",
+            "continent",
+            "year",
+            "st",
+            "clonal_complex",
+            "study",
+            "info",
+            "metadata_source",
+        ]
+        if x in metadata.columns
+    ]
+    metadata[audit_columns].reset_index().to_csv(
+        args.output_dir / "phylogeny_metadata_audit.tsv", sep="\t", index=False
+    )
+
     print(
-        f"PHYLOGENY FIGURE: {len(tip_order)} samples; {k}/{presence.shape[1]} accessory features displayed; "
+        f"PHYLOGENY FIGURE: {len(tip_order)} samples; "
+        f"{k}/{presence.shape[1]} accessory features displayed; "
         f"{len(extra_tree)} extra tree tips pruned -> {args.output_dir}"
     )
 
