@@ -18,8 +18,15 @@ cd "$WORKDIR"
 mkdir -p slurm_logs
 
 TREE="iqtree/campy52_core.treefile"
+METADATA="$MOMENTO_REPO/metadata/campylobacter_methylotypes_metadata_v0.2.tsv"
+OUTDIR="$COHORT_DIR/METHYLOTYPES_V0.1/PHYLOGENY_LIFE_AQUATIC_V0.2"
+
 if [[ ! -s "$TREE" ]]; then
   echo "ERROR: missing tree: $TREE" >&2
+  exit 2
+fi
+if [[ ! -s "$METADATA" ]]; then
+  echo "ERROR: missing metadata: $METADATA" >&2
   exit 2
 fi
 
@@ -29,8 +36,8 @@ conda activate momento
 python "$MOMENTO_REPO/scripts/plot_phylogeny_methylome_life_aquatic.py" \
   --tree "$TREE" \
   --methylotype-dir "$COHORT_DIR/METHYLOTYPES_V0.1" \
-  --metadata "$MOMENTO_REPO/metadata/campylobacter_methylotypes_metadata_v0.1.tsv" \
+  --metadata "$METADATA" \
   --cohort-summary "$COHORT_DIR/cohort.momento.tsv" \
-  --output-dir "$COHORT_DIR/METHYLOTYPES_V0.1/PHYLOGENY_LIFE_AQUATIC_V0.1"
+  --output-dir "$OUTDIR"
 
-echo "PHYLOGENY FIGURE COMPLETE"
+echo "PHYLOGENY FIGURE COMPLETE: $OUTDIR"
